@@ -342,6 +342,21 @@ class TestOrtSessions:
 
         assert given_providers(ort_session) == self.COREML_EP
 
+    def test_identifies_apple_silicon_device(self) -> None:
+        from immich_ml.sessions.ort import _apple_silicon
+
+        _apple_silicon.cache_clear()
+        device = _apple_silicon()
+        assert device is not None
+        assert isinstance(device.kind, str)
+        assert isinstance(device.version, str)
+
+    def test_sets_custom_execution_providers(self, monkeypatch: MonkeyPatch) -> None:
+        from immich_ml.sessions.ort import _providers_default
+
+        monkeypatch.setattr(settings, "execution_providers", ["CoreMLExecutionProvider", "CPUExecutionProvider"])
+        assert _providers_default() == ["CoreMLExecutionProvider", "CPUExecutionProvider"]
+
     @pytest.mark.providers(TRT_RTX_EP)
     def test_leaves_cuda_out_beside_tensorrt_rtx(self, ort_session: mock.Mock, providers: list[str]) -> None:
         ort_sessions("ViT-B-32__openai")

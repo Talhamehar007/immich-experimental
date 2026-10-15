@@ -553,6 +553,7 @@ export enum TranscodeHardwareAcceleration {
   Qsv = 'qsv',
   Vaapi = 'vaapi',
   Rkmpp = 'rkmpp',
+  Videotoolbox = 'videotoolbox',
   Disabled = 'disabled',
 }
 

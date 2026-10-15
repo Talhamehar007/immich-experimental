@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 2
 requires-python = ">=3.12, <4.0"
 resolution-markers = [
     "python_full_version >= '3.15' and sys_platform == 'darwin'",
@@ -698,7 +698,13 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
+apple-silicon = [
+    { name = "onnxruntime" },
+]
 armnn = [
+    { name = "onnxruntime" },
+]
+coreml = [
     { name = "onnxruntime" },
 ]
 cpu = [
@@ -780,7 +786,9 @@ requires-dist = [
     { name = "immich-model", git = "https://github.com/immich-app/ml-models.git?rev=8bf3fd1b44b0c8608f52fb6e50ddff52826576d8" },
     { name = "numpy", specifier = ">=2.4.0,<3.0" },
     { name = "onnx", specifier = ">=1.22.0" },
+    { name = "onnxruntime", marker = "extra == 'apple-silicon'", specifier = ">=1.23.2,<2" },
     { name = "onnxruntime", marker = "extra == 'armnn'", specifier = ">=1.23.2,<2" },
+    { name = "onnxruntime", marker = "extra == 'coreml'", specifier = ">=1.23.2,<2" },
     { name = "onnxruntime", marker = "extra == 'cpu'", specifier = ">=1.23.2,<2" },
     { name = "onnxruntime", marker = "extra == 'rknn'", specifier = ">=1.23.2,<2" },
     { name = "onnxruntime-ep-nv-tensorrt-rtx-cu12", marker = "platform_machine == 'x86_64' and extra == 'cuda'", specifier = ">=0.4.0,<0.5" },
@@ -799,7 +807,7 @@ requires-dist = [
     { name = "tokenizers", specifier = ">=0.15.0,<1.0" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.22.0,<1.0" },
 ]
-provides-extras = ["cpu", "cuda", "openvino", "armnn", "rknn", "rocm"]
+provides-extras = ["cpu", "cuda", "openvino", "armnn", "rknn", "rocm", "coreml", "apple-silicon"]
 
 [package.metadata.requires-dev]
 cuda-libs = [

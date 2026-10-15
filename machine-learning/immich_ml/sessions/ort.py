@@ -137,6 +137,8 @@ class GraphSpec:
                 return _amd_gpu(int(settings.device_id))
             case "nv_tensorrt_rtx":
                 return _nvidia_gpu(int(settings.device_id))
+            case "CoreMLExecutionProvider":
+                return _apple_silicon()
         return None
 
     @cached_property
@@ -291,6 +293,20 @@ def _cpu() -> str:
     return next(line for line in cpuinfo.splitlines() if line.startswith(("flags", "Features")))
 
 
+@cache
+def _apple_silicon() -> Device:
+    """Device identity for CoreML cache tracking across macOS versions and Apple Silicon chips."""
+    chip = "apple_silicon"
+    try:
+        brand = subprocess.check_output(["sysctl", "-n", "machdep.cpu.brand_string"], text=True).strip()
+        if brand:
+            chip = brand.replace(" ", "_").lower()
+    except Exception:
+        pass
+    os_ver = platform.mac_ver()[0] or platform.release()
+    return Device(chip, f"macos_{os_ver}_{platform.machine()}")
+
+
 class OrtSession:
     def __init__(
         self, model_path: Path | str, policy: ShapePolicy, providers: list[str] | None = None, threads: int = 2
@@ -441,6 +457,9 @@ def flush_denormals() -> None:
 
 def _providers_default() -> list[str]:
     from immich_ml.models.constants import SUPPORTED_PROVIDERS  # here, as the preparing child has no use for the models
+
+    if settings.execution_providers:
+        return settings.execution_providers
 
     available_providers = set(ort.get_available_providers())
     log.debug(f"Available ORT providers: {available_providers}")

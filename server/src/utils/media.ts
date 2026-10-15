@@ -134,6 +134,12 @@ export class BaseConfig implements VideoCodecSWConfig {
           : new RkmppSwDecodeConfig(config, interfaces, tune);
         break;
       }
+      case TranscodeHardwareAcceleration.Videotoolbox: {
+        handler = config.accelDecode
+          ? new VideotoolboxHwDecodeConfig(config, interfaces, tune)
+          : new VideotoolboxSwDecodeConfig(config, interfaces, tune);
+        break;
+      }
       default: {
         throw new Error(`${config.accel.toUpperCase()} acceleration is unsupported`);
       }
@@ -1141,3 +1147,65 @@ export class RkmppHwDecodeConfig extends RkmppSwDecodeConfig {
     return [];
   }
 }
+
+export class VideotoolboxSwDecodeConfig extends BaseHWConfig {
+  eligibleForTwoPass(): boolean {
+    return false;
+  }
+
+  getBaseInputOptions(): string[] {
+    return [];
+  }
+
+  getPresetOptions(): string[] {
+    return [];
+  }
+
+  getBitrateOptions(): string[] {
+    const bitrates = this.getBitrateDistribution();
+    if (bitrates.max > 0) {
+      return [
+        '-b:v',
+        `${bitrates.target}${bitrates.unit}`,
+        '-maxrate',
+        `${bitrates.max}${bitrates.unit}`,
+        '-bufsize',
+        `${bitrates.max * 2}${bitrates.unit}`,
+      ];
+    }
+    const crf = Math.max(0, Math.min(51, this.config.crf));
+    const quality = Math.max(1, Math.min(100, Math.round(((51 - crf) * 99) / 51) + 1));
+    return ['-q:v', String(quality)];
+  }
+
+  getEncoderOptions(): string[] {
+    const options: string[] = ['-allow_sw', '1'];
+    if (this.tune.lowLatency) {
+      options.push('-realtime', '1');
+    }
+    return options;
+  }
+
+  getFilterOptions(videoStream: VideoStreamInfo): string[] {
+    const options: string[] = [];
+    if (this.shouldScale(videoStream)) {
+      options.push(`scale=${this.getScaling(videoStream)}`);
+    }
+
+    const tonemapOptions = this.getToneMapping(videoStream);
+    if (tonemapOptions.length > 0) {
+      options.push(...tonemapOptions);
+    } else if (!videoStream.pixelFormat.endsWith('420p')) {
+      options.push('format=yuv420p');
+    }
+
+    return options;
+  }
+}
+
+export class VideotoolboxHwDecodeConfig extends VideotoolboxSwDecodeConfig {
+  getBaseInputOptions(): string[] {
+    return ['-hwaccel', 'videotoolbox', ...this.getInputThreadOptions()];
+  }
+}
+

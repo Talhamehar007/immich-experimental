@@ -3794,6 +3794,90 @@ describe(MediaService.name, () => {
       );
     });
 
+    it('should set options for videotoolbox sw decode', async () => {
+      mocks.assetJob.getForVideoConversion.mockResolvedValue({ ...asset, ...probeStub.matroskaContainer });
+      mocks.systemMetadata.get.mockResolvedValue({
+        ffmpeg: { accel: TranscodeHardwareAcceleration.Videotoolbox, accelDecode: false },
+      });
+      await sut.handleVideoConversion({ id: 'video-id' });
+      expect(mocks.media.transcode).toHaveBeenCalledWith(
+        '/original/path.ext',
+        expect.any(String),
+        expect.objectContaining({
+          inputOptions: [],
+          outputOptions: expect.arrayContaining([
+            '-c:v',
+            'h264_videotoolbox',
+            '-allow_sw',
+            '1',
+            '-movflags',
+            'faststart',
+            '-fps_mode',
+            'passthrough',
+          ]),
+          twoPass: false,
+        }),
+      );
+    });
+
+    it('should set options for videotoolbox hw decode', async () => {
+      mocks.assetJob.getForVideoConversion.mockResolvedValue({ ...asset, ...probeStub.matroskaContainer });
+      mocks.systemMetadata.get.mockResolvedValue({
+        ffmpeg: { accel: TranscodeHardwareAcceleration.Videotoolbox, accelDecode: true },
+      });
+      await sut.handleVideoConversion({ id: 'video-id' });
+      expect(mocks.media.transcode).toHaveBeenCalledWith(
+        '/original/path.ext',
+        expect.any(String),
+        expect.objectContaining({
+          inputOptions: expect.arrayContaining(['-hwaccel', 'videotoolbox']),
+          outputOptions: expect.arrayContaining(['-c:v', 'h264_videotoolbox', '-allow_sw', '1']),
+          twoPass: false,
+        }),
+      );
+    });
+
+    it('should set hevc options with hvc1 tag for videotoolbox', async () => {
+      mocks.assetJob.getForVideoConversion.mockResolvedValue({ ...asset, ...probeStub.videoStreamVp9 });
+      mocks.systemMetadata.get.mockResolvedValue({
+        ffmpeg: {
+          accel: TranscodeHardwareAcceleration.Videotoolbox,
+          targetVideoCodec: VideoCodec.Hevc,
+          accelDecode: true,
+        },
+      });
+      await sut.handleVideoConversion({ id: 'video-id' });
+      expect(mocks.media.transcode).toHaveBeenCalledWith(
+        '/original/path.ext',
+        expect.any(String),
+        expect.objectContaining({
+          inputOptions: expect.arrayContaining(['-hwaccel', 'videotoolbox']),
+          outputOptions: expect.arrayContaining(['-c:v', 'hevc_videotoolbox', '-tag:v', 'hvc1', '-allow_sw', '1']),
+          twoPass: false,
+        }),
+      );
+    });
+
+    it('should set vbr options for videotoolbox when max bitrate is enabled', async () => {
+      mocks.assetJob.getForVideoConversion.mockResolvedValue({ ...asset, ...probeStub.matroskaContainer });
+      mocks.systemMetadata.get.mockResolvedValue({
+        ffmpeg: {
+          accel: TranscodeHardwareAcceleration.Videotoolbox,
+          accelDecode: true,
+          maxBitrate: '10000k',
+        },
+      });
+      await sut.handleVideoConversion({ id: 'video-id' });
+      expect(mocks.media.transcode).toHaveBeenCalledWith(
+        '/original/path.ext',
+        expect.any(String),
+        expect.objectContaining({
+          outputOptions: expect.arrayContaining(['-b:v', '6897k', '-maxrate', '10000k', '-bufsize', '20000k']),
+          twoPass: false,
+        }),
+      );
+    });
+
     it('should tonemap when policy is required and video is hdr', async () => {
       mocks.assetJob.getForVideoConversion.mockResolvedValue({ ...asset, ...probeStub.videoStreamHDR });
       mocks.systemMetadata.get.mockResolvedValue({ ffmpeg: { transcode: TranscodePolicy.Required } });
