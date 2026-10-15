@@ -3,48 +3,29 @@
   import VideoRemoteViewer from '$lib/components/asset-viewer/VideoRemoteViewer.svelte';
   import { assetViewerFadeDuration } from '$lib/constants';
   import { assetViewerManager } from '$lib/managers/asset-viewer-manager.svelte';
+  import { authManager } from '$lib/managers/auth-manager.svelte';
   import { castManager } from '$lib/managers/cast-manager.svelte';
   import { featureFlagsManager } from '$lib/managers/feature-flags-manager.svelte';
-  import { authManager } from '$lib/managers/auth-manager.svelte';
   import { mediaCapabilitiesManager } from '$lib/managers/media-capabilities-manager.svelte';
-  import { autoPlayVideo, lang, loopVideo as loopVideoPreference } from '$lib/stores/preferences.store';
+  import {
+    autoPlayVideo,
+    loopVideo as loopVideoPreference,
+    videoViewerMuted,
+    videoViewerVolume,
+  } from '$lib/stores/preferences.store';
   import { getAssetHlsSessionUrl, getAssetHlsUrl, getAssetMediaUrl, getAssetPlaybackUrl } from '$lib/utils';
   import { AssetMediaSize, type AssetResponseDto } from '@immich/sdk';
-  import { Icon, LoadingSpinner, shortcuts } from '@immich/ui';
-  import {
-    mdiCheck,
-    mdiChevronLeft,
-    mdiChevronRight,
-    mdiFullscreen,
-    mdiFullscreenExit,
-    mdiPause,
-    mdiPlay,
-    mdiVolumeHigh,
-    mdiVolumeLow,
-    mdiVolumeMedium,
-    mdiVolumeMute,
-  } from '@mdi/js';
+  import { LoadingSpinner, shortcuts } from '@immich/ui';
   import 'hls-video-element';
   import type HlsVideoElement from 'hls-video-element';
   import Hls, { AbrController, Events, type FragLoadedData, type FragLoadingData, type HlsConfig } from 'hls.js';
-  import 'media-chrome/media-control-bar';
-  import 'media-chrome/media-controller';
-  import 'media-chrome/media-fullscreen-button';
-  import 'media-chrome/media-mute-button';
-  import 'media-chrome/media-play-button';
-  import 'media-chrome/media-playback-rate-button';
-  import 'media-chrome/media-time-display';
-  import 'media-chrome/media-volume-range';
-  import 'media-chrome/menu/media-playback-rate-menu';
-  import 'media-chrome/menu/media-rendition-menu';
-  import 'media-chrome/menu/media-settings-menu';
-  import 'media-chrome/menu/media-settings-menu-button';
-  import 'media-chrome/menu/media-settings-menu-item';
   import { onDestroy, onMount } from 'svelte';
   import { useSwipe, type SwipeCustomEvent } from 'svelte-gestures';
-  import { t } from 'svelte-i18n';
   import { fade } from 'svelte/transition';
-  import './immich-time-range';
+  import type { QualityOption, VideoFitMode, VideoStats } from './video-player/types';
+  import VideoControlsBar from './video-player/VideoControlsBar.svelte';
+  import VideoFeedbackOverlay from './video-player/VideoFeedbackOverlay.svelte';
+  import VideoStatsForNerds from './video-player/VideoStatsForNerds.svelte';
 
   interface Props {
     asset: AssetResponseDto;
@@ -74,37 +55,83 @@
     onClose = () => {},
   }: Props = $props();
 
+  let containerElement: HTMLDivElement | undefined = $state();
   let videoPlayer: HTMLVideoElement | undefined = $state();
   let isLoading = $state(true);
-  let hasLoadedMetadata = $state(false);
-  let assetFileUrl = $derived.by(() => {
-    if (featureFlagsManager.value.realtimeTranscoding) {
-      return getAssetHlsUrl(assetId);
-    }
+  let isPaused = $state(true);
+  let currentTime = $state(0);
+  let duration = $state(asset.duration ? asset.duration / 1000 : 0);
+  let buffered: TimeRanges | null = $state(null);
+  let playbackRate = $state(1);
+  let previousRateBeforeBoost = $state(1);
+  let isSpeedBoostActive = $state(false);
+  let fitMode: VideoFitMode = $state('contain');
+  let isAutoplayNext = $state(true);
+  let isFullscreen = $state(false);
+  let isSettingsOpen = $state(false);
+  let showStatsForNerds = $state(false);
+  let isScrubbing = $state(false);
+  let showControls = $state(true);
+  let hideControlsTimer: ReturnType<typeof setTimeout> | undefined;
 
-    if (playOriginalVideo) {
-      return getAssetMediaUrl({ id: assetId, size: AssetMediaSize.Original, cacheKey });
-    }
+  // Visual feedback states
+  let showPlayFlash = $state(false);
+  let playFlashTimer: ReturnType<typeof setTimeout> | undefined;
+  let seekFeedback: { direction: 'left' | 'right'; seconds: number } | null = $state(null);
+  let seekFeedbackTimer: ReturnType<typeof setTimeout> | undefined;
+  let volumeFeedback: { volume: number; muted: boolean } | null = $state(null);
+  let volumeFeedbackTimer: ReturnType<typeof setTimeout> | undefined;
 
-    return getAssetPlaybackUrl({ id: assetId, cacheKey });
-  });
-  const aspectRatio = $derived(asset.width && asset.height ? `${asset.width} / ${asset.height}` : undefined);
+  // Single vs double click disambiguation
+  let clickTimer: ReturnType<typeof setTimeout> | undefined;
+  let speedHoldTimer: ReturnType<typeof setTimeout> | undefined;
+
+  // Stream & Quality management
+  let isLiveTranscoding = $state(featureFlagsManager.value.realtimeTranscoding);
+  let selectedQualityMode: 'auto' | 'original' | 'transcoded' | number = $state('auto');
+  let availableQualities: QualityOption[] = $state([]);
+  let currentResolutionLabel = $state('');
+  let videoWidth = $state(0);
+  let videoHeight = $state(0);
+  let droppedFramesCount = $state(0);
+  let totalFramesCount = $state(0);
+
   let showVideo = $state(false);
   let hasFocused = $state(false);
   let activeSession: { assetId: string; id: string } | undefined;
   let rebuildCount = 0;
+  let statsUpdateTimer: ReturnType<typeof setInterval> | undefined;
 
   const MAX_REBUILDS = 1;
   const SESSION_ID_REGEX = /\/video\/stream\/([0-9a-f-]{36})\//;
 
-  // hls.js can abandon fetching an in-flight fragment if it thinks it'll take too long, in which case
-  // it emergency switches to a different variant. This extends the delay even further due to
-  // cold starting another transcode, so let the fragment finish and have steady ABR decide the next level.
-  //
-  // It can also emergency switch between fragments: while a switch's first segment is still loading,
-  // it can run out of buffer and drop to a lower level for just one segment before continuing at the switched quality.
-  // This can cause multiple redundant transcoding restarts when it occurs.
-  // Hold the committed level until its first fragment lands, then resume normal ABR.
+  let containerWidth = $state(0);
+  let containerHeight = $state(0);
+
+  // Derived URL based on active quality mode and live transcoding
+  let assetFileUrl = $derived.by(() => {
+    if (selectedQualityMode === 'original') {
+      return getAssetMediaUrl({ id: assetId, size: AssetMediaSize.Original, cacheKey });
+    }
+    if (selectedQualityMode === 'transcoded') {
+      return getAssetPlaybackUrl({ id: assetId, cacheKey });
+    }
+    if (isLiveTranscoding && featureFlagsManager.value.realtimeTranscoding) {
+      return getAssetHlsUrl(assetId);
+    }
+    if (playOriginalVideo) {
+      return getAssetMediaUrl({ id: assetId, size: AssetMediaSize.Original, cacheKey });
+    }
+    return getAssetPlaybackUrl({ id: assetId, cacheKey });
+  });
+
+  const activeQualityId = $derived.by(() => {
+    if (typeof selectedQualityMode === 'number') {
+      return `hls-${selectedQualityMode}`;
+    }
+    return selectedQualityMode;
+  });
+
   class NoAbandonAbrController extends AbrController {
     private switchTarget = -1;
 
@@ -124,7 +151,6 @@
     override get nextAutoLevel(): number {
       const level = super.nextAutoLevel;
       const target = this.hls.levels[this.switchTarget];
-      // Hold the committed level, but only while hls.js still considers it healthy.
       if (target && level < this.switchTarget && target.loadError === 0 && target.fragmentError === 0) {
         return this.switchTarget;
       }
@@ -177,15 +203,64 @@
     return el?.tagName === 'HLS-VIDEO';
   };
 
-  const wireHlsListeners = (el: HlsVideoElement, assetId: string, resumeTime?: number) => {
+  const updateQualitiesList = (hlsApi?: Hls) => {
+    const list: QualityOption[] = [];
+
+    // Auto option
+    list.push({
+      id: 'auto',
+      label: currentResolutionLabel ? `Auto (${currentResolutionLabel})` : 'Auto (Recommended)',
+      resolutionLabel: currentResolutionLabel || undefined,
+    });
+
+    // If HLS levels exist, add individual resolutions
+    if (hlsApi && hlsApi.levels && hlsApi.levels.length > 0) {
+      for (const [index, level] of hlsApi.levels.entries()) {
+        const height = level.height;
+        const resName =
+          height >= 2160 ? '4K 2160p' : height >= 1440 ? '2K 1440p' : height >= 720 ? `${height}p HD` : `${height}p`;
+        list.push({
+          id: `hls-${index}`,
+          label: resName,
+          resolutionLabel: height >= 720 ? 'HD' : undefined,
+          height: level.height,
+          width: level.width,
+          bitrate: level.bitrate,
+          codec: level.videoCodec,
+          isHls: true,
+          levelIndex: index,
+        });
+      }
+    }
+
+    // Direct stream options
+    const origHeight = asset.height || 1080;
+    const origLabel =
+      origHeight >= 2160 ? 'Original (4K)' : origHeight >= 1080 ? 'Original (1080p)' : 'Original (Source)';
+    list.push(
+      {
+        id: 'original',
+        label: origLabel,
+        resolutionLabel: 'SOURCE',
+        height: asset.height || undefined,
+        width: asset.width || undefined,
+      },
+      {
+        id: 'transcoded',
+        label: 'Optimized (Web MP4)',
+        resolutionLabel: 'MP4',
+      },
+    );
+
+    availableQualities = list;
+  };
+
+  const wireHlsListeners = (el: HlsVideoElement, currentAssetId: string, resumeTime?: number) => {
     const api = el.api;
     if (!api) {
       return;
     }
 
-    // This is a hack to make the rendition menu use `api.currentLevel` instead of `api.nextLevel`.
-    // `api.nextLevel` makes the player request the next segment followed by the current segment.
-    // That backward request causes the server to restart transcoding for no reason.
     Object.defineProperty(api, 'nextLevel', {
       configurable: true,
       get: () => api.currentLevel,
@@ -196,11 +271,10 @@
 
     // eslint-disable-next-line @typescript-eslint/no-misused-promises
     api.on(Hls.Events.MANIFEST_PARSED, async () => {
-      // Defer hls.js's first fragment load until we filter out suboptimal variants
       api.stopLoad();
       const id = api.levels[0]?.url[0]?.match(SESSION_ID_REGEX)?.[1];
       if (id) {
-        activeSession = { assetId, id };
+        activeSession = { assetId: currentAssetId, id };
       }
 
       const keep = await mediaCapabilitiesManager.efficientLevels(api.levels);
@@ -210,39 +284,101 @@
         }
       }
 
+      updateQualitiesList(api);
+
+      // If user selected a specific HLS level previously
+      if (typeof selectedQualityMode === 'number') {
+        api.currentLevel = selectedQualityMode;
+      } else {
+        api.currentLevel = -1; // Auto
+      }
+
       api.startLoad(resumeTime);
+    });
+
+    api.on(Hls.Events.LEVEL_SWITCHED, (_, data) => {
+      const level = api.levels[data.level];
+      if (level) {
+        currentResolutionLabel = `${level.height}p`;
+        updateQualitiesList(api);
+      }
     });
 
     api.on(Hls.Events.FRAG_LOADED, () => (rebuildCount = 0));
 
     api.on(Hls.Events.ERROR, (_, data) => {
-      // 404 on a fragment can mean the server-side session has expired. Refetch
-      // master for a new session, but give up if it still 404s.
       if (
         !data.fatal ||
         data.details !== Hls.ErrorDetails.FRAG_LOAD_ERROR ||
         data.response?.code !== 404 ||
         rebuildCount++ >= MAX_REBUILDS
       ) {
-        console.error('HLS error', JSON.stringify(data));
+        // Fallback gracefully to direct playback if HLS fails completely
+        if (data.fatal && isLiveTranscoding) {
+          console.warn('HLS stream fatal error, falling back to direct video stream');
+          isLiveTranscoding = false;
+          selectedQualityMode = 'transcoded';
+        }
         return;
       }
-      console.warn('Error loading segment, starting new session');
+      console.warn('Error loading segment, restarting session');
       activeSession = undefined;
       resumeTime = el.currentTime;
       el.load();
-      // wireHlsListeners must run after el.api is repopulated.
-      queueMicrotask(() => wireHlsListeners(el, assetId, resumeTime));
+      queueMicrotask(() => wireHlsListeners(el, currentAssetId, resumeTime));
     });
   };
 
   onMount(() => {
     showVideo = true;
+    updateQualitiesList();
+
+    // Stats periodic refresher
+    statsUpdateTimer = setInterval(() => {
+      if (videoPlayer) {
+        currentTime = videoPlayer.currentTime;
+        duration = videoPlayer.duration || (asset.duration ? asset.duration / 1000 : 0);
+        buffered = videoPlayer.buffered;
+        videoWidth = videoPlayer.videoWidth;
+        videoHeight = videoPlayer.videoHeight;
+
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const quality = (videoPlayer as any).getVideoPlaybackQuality?.();
+        if (quality) {
+          droppedFramesCount = quality.droppedVideoFrames;
+          totalFramesCount = quality.totalVideoFrames;
+        }
+      }
+    }, 500);
+  });
+
+  onDestroy(() => {
+    if (statsUpdateTimer) {
+      clearInterval(statsUpdateTimer);
+    }
+    if (hideControlsTimer) {
+      clearTimeout(hideControlsTimer);
+    }
+    if (clickTimer) {
+      clearTimeout(clickTimer);
+    }
+    if (speedHoldTimer) {
+      clearTimeout(speedHoldTimer);
+    }
+    if (seekFeedbackTimer) {
+      clearTimeout(seekFeedbackTimer);
+    }
+    if (volumeFeedbackTimer) {
+      clearTimeout(volumeFeedbackTimer);
+    }
+    releaseSession();
+    if (videoPlayer) {
+      videoPlayer.src = '';
+    }
   });
 
   $effect(() => {
-    // reactive on `assetFileUrl` changes
-    hasLoadedMetadata = false;
+    // When URL or source changes
     if (videoPlayer && assetFileUrl) {
       hasFocused = false;
       rebuildCount = 0;
@@ -270,40 +406,340 @@
     return () => window.removeEventListener('pagehide', onPagehide);
   });
 
-  onDestroy(() => {
-    if (videoPlayer) {
-      videoPlayer.src = '';
+  const resetHideControlsTimer = () => {
+    showControls = true;
+    if (hideControlsTimer) {
+      clearTimeout(hideControlsTimer);
     }
-  });
+    if (!isPaused && !isSettingsOpen && !isScrubbing) {
+      hideControlsTimer = setTimeout(() => {
+        showControls = false;
+      }, 2500);
+    }
+  };
 
   const handleCanPlay = async (video: HTMLVideoElement) => {
     try {
+      video.volume = $videoViewerVolume;
+      video.muted = $videoViewerMuted;
+      video.playbackRate = playbackRate;
       if (!video.paused) {
         await video.play();
         onVideoStarted();
       }
     } catch (error) {
       if (error instanceof DOMException && error.name === 'NotAllowedError') {
-        await tryForceMutedPlay(video);
-        return;
+        try {
+          video.muted = true;
+          $videoViewerMuted = true;
+          await video.play();
+          onVideoStarted();
+        } catch {
+          // ignore auto-play failure
+        }
       }
-
-      // auto-play failed
     } finally {
       isLoading = false;
     }
   };
 
-  const tryForceMutedPlay = async (video: HTMLVideoElement) => {
-    if (video.muted) {
+  // Playback Controls
+  const togglePlay = () => {
+    if (!videoPlayer) {
+      return;
+    }
+    if (videoPlayer.paused) {
+      void videoPlayer.play();
+      isPaused = false;
+      flashPlayIcon(false);
+    } else {
+      videoPlayer.pause();
+      isPaused = true;
+      flashPlayIcon(true);
+    }
+    resetHideControlsTimer();
+  };
+
+  const flashPlayIcon = (paused: boolean) => {
+    showPlayFlash = true;
+    isPaused = paused;
+    if (playFlashTimer) {
+      clearTimeout(playFlashTimer);
+    }
+    playFlashTimer = setTimeout(() => {
+      showPlayFlash = false;
+    }, 400);
+  };
+
+  const seekRelative = (seconds: number) => {
+    if (!videoPlayer) {
+      return;
+    }
+    const newTime = Math.max(0, Math.min(videoPlayer.duration || duration, videoPlayer.currentTime + seconds));
+    videoPlayer.currentTime = newTime;
+    currentTime = newTime;
+
+    // Show seek feedback badge
+    const direction = seconds < 0 ? 'left' : 'right';
+    const currentFeedbackSeconds =
+      seekFeedback?.direction === direction ? seekFeedback.seconds + Math.abs(seconds) : Math.abs(seconds);
+    seekFeedback = { direction, seconds: currentFeedbackSeconds };
+
+    if (seekFeedbackTimer) {
+      clearTimeout(seekFeedbackTimer);
+    }
+    seekFeedbackTimer = setTimeout(() => {
+      seekFeedback = null;
+    }, 700);
+
+    resetHideControlsTimer();
+  };
+
+  const handleSeek = (time: number) => {
+    if (!videoPlayer) {
+      return;
+    }
+    videoPlayer.currentTime = time;
+    currentTime = time;
+    resetHideControlsTimer();
+  };
+
+  const adjustVolume = (delta: number) => {
+    if (!videoPlayer) {
+      return;
+    }
+    const newVol = Math.max(0, Math.min(1, Math.round((videoPlayer.volume + delta) * 20) / 20));
+    videoPlayer.volume = newVol;
+    $videoViewerVolume = newVol;
+    if (newVol > 0 && videoPlayer.muted) {
+      videoPlayer.muted = false;
+      $videoViewerMuted = false;
+    }
+
+    volumeFeedback = { volume: newVol, muted: videoPlayer.muted };
+    if (volumeFeedbackTimer) {
+      clearTimeout(volumeFeedbackTimer);
+    }
+    volumeFeedbackTimer = setTimeout(() => {
+      volumeFeedback = null;
+    }, 1200);
+
+    resetHideControlsTimer();
+  };
+
+  const handleVolumeChange = (newVol: number) => {
+    if (!videoPlayer) {
+      return;
+    }
+    videoPlayer.volume = newVol;
+    $videoViewerVolume = newVol;
+    if (newVol > 0 && videoPlayer.muted) {
+      videoPlayer.muted = false;
+      $videoViewerMuted = false;
+    }
+    resetHideControlsTimer();
+  };
+
+  const toggleMute = () => {
+    if (!videoPlayer) {
+      return;
+    }
+    videoPlayer.muted = !videoPlayer.muted;
+    $videoViewerMuted = videoPlayer.muted;
+
+    volumeFeedback = { volume: videoPlayer.volume, muted: videoPlayer.muted };
+    if (volumeFeedbackTimer) {
+      clearTimeout(volumeFeedbackTimer);
+    }
+    volumeFeedbackTimer = setTimeout(() => {
+      volumeFeedback = null;
+    }, 1200);
+
+    resetHideControlsTimer();
+  };
+
+  const handleSelectSpeed = (speed: number) => {
+    playbackRate = speed;
+    if (videoPlayer) {
+      videoPlayer.playbackRate = speed;
+    }
+    resetHideControlsTimer();
+  };
+
+  const handleSelectQuality = (quality: QualityOption) => {
+    if (!videoPlayer) {
+      return;
+    }
+    const curTime = videoPlayer.currentTime;
+    const wasPlaying = !videoPlayer.paused;
+
+    switch (quality.id) {
+      case 'original': {
+        selectedQualityMode = 'original';
+        isLiveTranscoding = false;
+
+        break;
+      }
+      case 'transcoded': {
+        selectedQualityMode = 'transcoded';
+        isLiveTranscoding = false;
+
+        break;
+      }
+      case 'auto': {
+        selectedQualityMode = 'auto';
+        isLiveTranscoding = true;
+        if (isHlsElement(videoPlayer) && videoPlayer.api) {
+          videoPlayer.api.currentLevel = -1;
+        }
+
+        break;
+      }
+      default: {
+        if (quality.isHls && quality.levelIndex !== undefined) {
+          selectedQualityMode = quality.levelIndex;
+          isLiveTranscoding = true;
+          if (isHlsElement(videoPlayer) && videoPlayer.api) {
+            videoPlayer.api.currentLevel = quality.levelIndex;
+          }
+        }
+      }
+    }
+
+    queueMicrotask(() => {
+      if (videoPlayer) {
+        videoPlayer.currentTime = curTime;
+        if (wasPlaying) {
+          void videoPlayer.play();
+        }
+      }
+    });
+
+    resetHideControlsTimer();
+  };
+
+  const toggleFullscreen = async () => {
+    if (!containerElement) {
+      return;
+    }
+    try {
+      if (document.fullscreenElement) {
+        await document.exitFullscreen();
+        isFullscreen = false;
+      } else {
+        await containerElement.requestFullscreen();
+        isFullscreen = true;
+      }
+    } catch {
+      // Fullscreen not permitted or failed
+    }
+    resetHideControlsTimer();
+  };
+
+  const togglePiP = async () => {
+    if (!videoPlayer) {
+      return;
+    }
+    try {
+      if (document.pictureInPictureElement) {
+        await document.exitPictureInPicture();
+      } else if (document.pictureInPictureEnabled) {
+        await videoPlayer.requestPictureInPicture();
+      }
+    } catch {
+      // PiP not available or failed
+    }
+    resetHideControlsTimer();
+  };
+
+  const toggleFitMode = () => {
+    fitMode = fitMode === 'contain' ? 'cover' : 'contain';
+    resetHideControlsTimer();
+  };
+
+  const toggleLiveTranscoding = () => {
+    isLiveTranscoding = !isLiveTranscoding;
+    selectedQualityMode = isLiveTranscoding ? 'auto' : 'transcoded';
+    resetHideControlsTimer();
+  };
+
+  // Video Container Interactions (Single click vs double click vs hold to 2x speed)
+  const handleVideoPointerDown = (event: PointerEvent) => {
+    // Only primary button
+    if (event.button !== 0) {
       return;
     }
 
-    try {
-      video.muted = true;
-      await handleCanPlay(video);
-    } catch {
-      // muted auto-play failed
+    // Hold for 2x speed (long press YouTube gesture)
+    speedHoldTimer = setTimeout(() => {
+      if (videoPlayer && !videoPlayer.paused) {
+        previousRateBeforeBoost = videoPlayer.playbackRate;
+        videoPlayer.playbackRate = 2;
+        isSpeedBoostActive = true;
+      }
+    }, 400);
+  };
+
+  const handleVideoPointerUp = () => {
+    if (speedHoldTimer) {
+      clearTimeout(speedHoldTimer);
+      speedHoldTimer = undefined;
+    }
+    if (isSpeedBoostActive) {
+      isSpeedBoostActive = false;
+      if (videoPlayer) {
+        videoPlayer.playbackRate = previousRateBeforeBoost;
+      }
+    }
+  };
+
+  const handleVideoAreaClick = (event: MouseEvent) => {
+    if (isSpeedBoostActive) {
+      return;
+    }
+
+    const rect = containerElement?.getBoundingClientRect();
+    if (!rect) {
+      return;
+    }
+    const relativeX = (event.clientX - rect.left) / rect.width;
+
+    if (clickTimer) {
+      // Double click detected!
+      clearTimeout(clickTimer);
+      clickTimer = undefined;
+
+      if (relativeX < 0.35) {
+        // Double click left: rewind 10s
+        seekRelative(-10);
+      } else if (relativeX > 0.65) {
+        // Double click right: forward 10s
+        seekRelative(10);
+      } else {
+        // Double click center: fullscreen
+        void toggleFullscreen();
+      }
+    } else {
+      // Wait to see if second click arrives
+      clickTimer = setTimeout(() => {
+        clickTimer = undefined;
+        // Single click: toggle play/pause
+        togglePlay();
+      }, 250);
+    }
+  };
+
+  const handleVideoEnded = () => {
+    if ($loopVideoPreference && loopVideo) {
+      if (videoPlayer) {
+        videoPlayer.currentTime = 0;
+        void videoPlayer.play();
+      }
+      return;
+    }
+    onVideoEnded();
+    if (isAutoplayNext) {
+      onNextAsset();
     }
   };
 
@@ -315,47 +751,154 @@
     }
   };
 
-  let containerWidth = $state(0);
-  let containerHeight = $state(0);
+  const statsData: VideoStats = $derived.by(() => {
+    const buf = buffered;
+    let bufferHealthStr = '0s';
+    if (buf && buf.length > 0) {
+      const end = buf.end(buf.length - 1);
+      bufferHealthStr = `${Math.max(0, end - currentTime).toFixed(1)}s`;
+    }
+    return {
+      assetId: asset.id.slice(0, 13) + '...',
+      viewport: `${containerWidth}x${containerHeight}`,
+      currentResolution: `${videoWidth}x${videoHeight}`,
+      optimalResolution: asset.width && asset.height ? `${asset.width}x${asset.height}` : 'Auto',
+      droppedFrames: totalFramesCount > 0 ? `${droppedFramesCount} / ${totalFramesCount}` : '0',
+      streamType: isLiveTranscoding ? 'HLS Live Transcode' : 'Direct MP4 Stream',
+      codecs:
+        isHlsElement(videoPlayer) && videoPlayer.api?.levels?.[0]?.videoCodec
+          ? videoPlayer.api.levels[0].videoCodec
+          : 'mp4 / avc1',
+      currentTime: `${currentTime.toFixed(1)}s`,
+      duration: `${duration.toFixed(1)}s`,
+      bufferHealth: bufferHealthStr,
+      volume: `${Math.round($videoViewerVolume * 100)}% (${$videoViewerMuted ? 'muted' : 'unmuted'})`,
+      playbackRate: `${playbackRate}x`,
+    };
+  });
 
   $effect(() => {
     if (assetViewerManager.isFaceEditMode) {
       videoPlayer?.pause();
+      isPaused = true;
     }
   });
-
-  // The time is only refreshed on HLS fragment decode by default,
-  // so manually emit events on seek to update it immediately.
-  const onSeeking = (event: Event) => event.currentTarget?.dispatchEvent(new Event('timeupdate'));
 </script>
 
 <svelte:body
   use:shortcuts={[
     {
       shortcut: { key: ' ' },
-      onShortcut: () => (videoPlayer?.paused ? videoPlayer?.play() : videoPlayer?.pause()),
+      onShortcut: togglePlay,
     },
     {
-      shortcut: { shift: true, key: 'ArrowLeft' },
-      onShortcut: () =>
-        videoPlayer ? (videoPlayer.currentTime = Math.max(videoPlayer.currentTime - 0.4, 0)) : undefined,
+      shortcut: { key: 'k' },
+      onShortcut: togglePlay,
     },
     {
-      shortcut: { shift: true, key: 'ArrowRight' },
-      onShortcut: () =>
-        videoPlayer
-          ? (videoPlayer.currentTime = Math.min(videoPlayer.currentTime + 0.4, videoPlayer.duration))
-          : undefined,
+      shortcut: { key: 'j' },
+      onShortcut: () => seekRelative(-10),
+    },
+    {
+      shortcut: { key: 'l' },
+      onShortcut: () => seekRelative(10),
+    },
+    {
+      shortcut: { key: 'ArrowLeft' },
+      onShortcut: () => seekRelative(-5),
+    },
+    {
+      shortcut: { key: 'ArrowRight' },
+      onShortcut: () => seekRelative(5),
+    },
+    {
+      shortcut: { key: 'ArrowUp' },
+      onShortcut: () => adjustVolume(0.05),
+    },
+    {
+      shortcut: { key: 'ArrowDown' },
+      onShortcut: () => adjustVolume(-0.05),
+    },
+    {
+      shortcut: { key: 'm' },
+      onShortcut: toggleMute,
+    },
+    {
+      shortcut: { key: 'f' },
+      onShortcut: toggleFullscreen,
+    },
+    {
+      shortcut: { key: 't' },
+      onShortcut: toggleFitMode,
+    },
+    {
+      shortcut: { key: 'i' },
+      onShortcut: togglePiP,
+    },
+    {
+      shortcut: { key: '0' },
+      onShortcut: () => handleSeek(0),
+    },
+    {
+      shortcut: { key: '1' },
+      onShortcut: () => handleSeek(duration * 0.1),
+    },
+    {
+      shortcut: { key: '2' },
+      onShortcut: () => handleSeek(duration * 0.2),
+    },
+    {
+      shortcut: { key: '3' },
+      onShortcut: () => handleSeek(duration * 0.3),
+    },
+    {
+      shortcut: { key: '4' },
+      onShortcut: () => handleSeek(duration * 0.4),
+    },
+    {
+      shortcut: { key: '5' },
+      onShortcut: () => handleSeek(duration * 0.5),
+    },
+    {
+      shortcut: { key: '6' },
+      onShortcut: () => handleSeek(duration * 0.6),
+    },
+    {
+      shortcut: { key: '7' },
+      onShortcut: () => handleSeek(duration * 0.7),
+    },
+    {
+      shortcut: { key: '8' },
+      onShortcut: () => handleSeek(duration * 0.8),
+    },
+    {
+      shortcut: { key: '9' },
+      onShortcut: () => handleSeek(duration * 0.9),
+    },
+    {
+      shortcut: { key: '<' },
+      onShortcut: () => handleSelectSpeed(Math.max(0.25, playbackRate - 0.25)),
+    },
+    {
+      shortcut: { key: '>' },
+      onShortcut: () => handleSelectSpeed(Math.min(3, playbackRate + 0.25)),
     },
   ]}
 />
 
 {#if showVideo}
   <div
+    bind:this={containerElement}
+    role="region"
+    aria-label="Video player"
     transition:fade={{ duration: assetViewerFadeDuration }}
-    class="flex h-full place-content-center place-items-center select-none"
+    class="relative flex size-full place-content-center place-items-center overflow-hidden bg-black select-none {showControls
+      ? 'cursor-default'
+      : 'cursor-none'}"
     bind:clientWidth={containerWidth}
     bind:clientHeight={containerHeight}
+    onmousemove={resetHideControlsTimer}
+    onmouseenter={resetHideControlsTimer}
   >
     {#if castManager.isCasting}
       <div class="h-full place-content-center place-items-center">
@@ -367,34 +910,38 @@
         />
       </div>
     {:else}
-      <!-- dir=ltr based on https://github.com/videojs/video.js/issues/949 -->
-      <media-controller
-        dir="ltr"
-        lang={$lang}
-        nohotkeys
-        class="dark h-full max-w-full"
-        style:aspect-ratio={aspectRatio}
-        defaultduration={asset.duration! / 1000}
+      <!-- Video Element Area with Gestures -->
+      <div
+        role="presentation"
+        class="relative flex size-full items-center justify-center overflow-hidden"
+        onclick={handleVideoAreaClick}
+        onpointerdown={handleVideoPointerDown}
+        onpointerup={handleVideoPointerUp}
+        onpointercancel={handleVideoPointerUp}
       >
-        {#if featureFlagsManager.value.realtimeTranscoding}
+        {#if isLiveTranscoding && featureFlagsManager.value.realtimeTranscoding}
           <hls-video
             bind:this={videoPlayer}
-            slot="media"
             loop={$loopVideoPreference && loopVideo}
             autoplay={$autoPlayVideo}
             disablePictureInPicture
             playsinline
             {...useSwipe(onSwipe)}
-            class="h-full object-contain"
+            class="size-full {fitMode === 'cover' ? 'object-cover' : 'object-contain'}"
             oncanplay={(e: Event) => handleCanPlay(e.currentTarget as HTMLVideoElement)}
-            onloadedmetadata={() => (hasLoadedMetadata = true)}
-            onended={onVideoEnded}
-            onseeking={onSeeking}
+            onplay={() => (isPaused = false)}
+            onpause={() => (isPaused = true)}
+            ontimeupdate={() => {
+              if (videoPlayer && !isScrubbing) {
+                currentTime = videoPlayer.currentTime;
+                buffered = videoPlayer.buffered;
+              }
+            }}
+            onended={handleVideoEnded}
             onplaying={(e: Event) => {
               if (hasFocused) {
                 return;
               }
-
               (e.currentTarget as HTMLElement).focus();
               hasFocused = true;
             }}
@@ -404,23 +951,27 @@
         {:else}
           <video
             bind:this={videoPlayer}
-            slot="media"
             src={assetFileUrl}
             loop={$loopVideoPreference && loopVideo}
             autoplay={$autoPlayVideo}
             disablePictureInPicture
             playsinline
             {...useSwipe(onSwipe)}
-            class="h-full object-contain"
+            class="size-full {fitMode === 'cover' ? 'object-cover' : 'object-contain'}"
             oncanplay={(e) => handleCanPlay(e.currentTarget)}
-            onloadedmetadata={() => (hasLoadedMetadata = true)}
-            onended={onVideoEnded}
-            onseeking={onSeeking}
+            onplay={() => (isPaused = false)}
+            onpause={() => (isPaused = true)}
+            ontimeupdate={() => {
+              if (videoPlayer && !isScrubbing) {
+                currentTime = videoPlayer.currentTime;
+                buffered = videoPlayer.buffered;
+              }
+            }}
+            onended={handleVideoEnded}
             onplaying={(e) => {
               if (hasFocused) {
                 return;
               }
-
               e.currentTarget.focus();
               hasFocused = true;
             }}
@@ -429,155 +980,87 @@
           ></video>
         {/if}
 
-        {#if extendedControls}
-          <media-settings-menu hidden anchor="auto" class="min-w-3xs rounded-xl border border-light-300 shadow-sm">
-            <Icon slot="checked-indicator" icon={mdiCheck} class="m-2" />
-            <media-settings-menu-item class="mx-1 rounded-lg p-1 ps-2">
-              {$t('media_chrome.playback_rate')}
-              <Icon slot="suffix" icon={mdiChevronRight} class="m-2" />
-              <media-playback-rate-menu slot="submenu" hidden rates="0.5 1 1.5 2">
-                <Icon slot="back-icon" icon={mdiChevronLeft} class="m-2" />
-                <span slot="title">{$t('media_chrome.playback_rate')}</span>
-              </media-playback-rate-menu>
-            </media-settings-menu-item>
-            {#if featureFlagsManager.value.realtimeTranscoding}
-              <media-settings-menu-item class="mx-1 rounded-lg p-1 ps-2">
-                {$t('video_quality')}
-                <Icon slot="suffix" icon={mdiChevronRight} class="m-2" />
-                <media-rendition-menu slot="submenu" hidden>
-                  <Icon slot="back-icon" icon={mdiChevronLeft} class="m-2" />
-                  <span slot="title">{$t('video_quality')}</span>
-                </media-rendition-menu>
-              </media-settings-menu-item>
-            {/if}
-          </media-settings-menu>
-        {/if}
+        <!-- Interactive YouTube Feedback Overlay (Center play flash, double-click ripples, 2x hold, volume toast) -->
+        <VideoFeedbackOverlay {showPlayFlash} {isPaused} {seekFeedback} {isSpeedBoostActive} {volumeFeedback} />
+      </div>
 
-        <div class="flex h-32 w-full flex-col justify-end bg-linear-to-b to-black/80 px-4">
-          <media-control-bar part="bottom" class="flex h-10 w-full gap-2">
-            <media-play-button class="shrink-0 rounded-full p-2 outline-none">
-              <Icon slot="play" icon={mdiPlay} />
-              <Icon slot="pause" icon={mdiPause} />
-            </media-play-button>
-            <media-time-display showduration class="rounded-lg p-2 outline-none"></media-time-display>
+      <!-- Stats for Nerds Overlay -->
+      {#if showStatsForNerds}
+        <VideoStatsForNerds stats={statsData} onClose={() => (showStatsForNerds = false)} />
+      {/if}
 
-            <span class="grow"></span>
-
-            <div
-              class="volume-wrapper shrink-0 rounded-full bg-light-100/0 transition-colors duration-400 hover:bg-light-100"
-            >
-              <media-volume-range class="h-full bg-none outline-none"></media-volume-range>
-              <media-mute-button class="bg-none p-2 outline-none">
-                <Icon slot="off" icon={mdiVolumeMute} />
-                <Icon slot="low" icon={mdiVolumeLow} />
-                <Icon slot="medium" icon={mdiVolumeMedium} />
-                <Icon slot="high" icon={mdiVolumeHigh} />
-              </media-mute-button>
-            </div>
-
-            {#if extendedControls}
-              <media-fullscreen-button class="shrink-0 rounded-full p-2 outline-none">
-                <Icon slot="enter" icon={mdiFullscreen} />
-                <Icon slot="exit" icon={mdiFullscreenExit} />
-              </media-fullscreen-button>
-              <media-settings-menu-button class="shrink-0 rounded-full p-2 outline-none"></media-settings-menu-button>
-            {/if}
-          </media-control-bar>
-          <immich-time-range class="h-8 w-full rounded-lg px-2 pb-3 outline-none"></immich-time-range>
+      <!-- YouTube Controls Bar (Bottom) -->
+      {#if extendedControls}
+        <div
+          class="absolute inset-x-0 bottom-0 z-30 transition-opacity duration-300 {showControls ||
+          !isPaused ||
+          isSettingsOpen ||
+          isScrubbing
+            ? 'opacity-100'
+            : 'pointer-events-none opacity-0'}"
+        >
+          <VideoControlsBar
+            {isPaused}
+            {currentTime}
+            {duration}
+            {buffered}
+            volume={$videoViewerVolume}
+            isMuted={$videoViewerMuted}
+            {playbackRate}
+            {fitMode}
+            {isAutoplayNext}
+            {isFullscreen}
+            {isSettingsOpen}
+            qualities={availableQualities}
+            {activeQualityId}
+            isLooping={$loopVideoPreference && loopVideo}
+            {isLiveTranscoding}
+            canLiveTranscode={featureFlagsManager.value.realtimeTranscoding}
+            {showStatsForNerds}
+            hasPreviousAsset={Boolean(onPreviousAsset)}
+            hasNextAsset={Boolean(onNextAsset)}
+            onTogglePlay={togglePlay}
+            {onPreviousAsset}
+            {onNextAsset}
+            onSeek={handleSeek}
+            onScrubStateChange={(scrubbing) => {
+              isScrubbing = scrubbing;
+              resetHideControlsTimer();
+            }}
+            onVolumeChange={handleVolumeChange}
+            onToggleMute={toggleMute}
+            onToggleAutoplayNext={() => (isAutoplayNext = !isAutoplayNext)}
+            onTogglePiP={togglePiP}
+            onToggleFitMode={toggleFitMode}
+            onToggleSettings={() => {
+              isSettingsOpen = !isSettingsOpen;
+              resetHideControlsTimer();
+            }}
+            onCloseSettings={() => {
+              isSettingsOpen = false;
+              resetHideControlsTimer();
+            }}
+            onToggleFullscreen={toggleFullscreen}
+            onSelectSpeed={handleSelectSpeed}
+            onSelectQuality={handleSelectQuality}
+            onToggleLoop={() => ($loopVideoPreference = !$loopVideoPreference)}
+            onToggleLiveTranscoding={toggleLiveTranscoding}
+            onToggleStatsForNerds={() => (showStatsForNerds = !showStatsForNerds)}
+          />
         </div>
-      </media-controller>
+      {/if}
 
+      <!-- Loading Spinner -->
       {#if isLoading}
-        <div class="absolute flex place-content-center place-items-center">
+        <div class="pointer-events-none absolute flex place-content-center place-items-center">
           <LoadingSpinner />
         </div>
       {/if}
 
-      {#if assetViewerManager.isFaceEditMode && videoPlayer && hasLoadedMetadata}
+      <!-- Face Editor Overlay -->
+      {#if assetViewerManager.isFaceEditMode && videoPlayer}
         <FaceEditor htmlElement={videoPlayer} {containerWidth} {containerHeight} {assetId} />
       {/if}
     {/if}
   </div>
 {/if}
-
-<style>
-  media-controller {
-    --media-control-background: none;
-    --media-control-hover-background: var(--immich-ui-light-100);
-    --media-focus-box-shadow: 0 0 0 2px var(--immich-ui-dark);
-    --media-font-family: var(--font-sans);
-    --media-font-size: var(--text-base);
-    --media-font-weight: var(--font-weight-medium);
-    --media-menu-border-radius: var(--radius-xl);
-    --media-menu-gap: var(--spacing);
-    --media-menu-item-hover-background: var(--immich-ui-light-200);
-    --media-menu-item-icon-height: 1em;
-    --media-menu-item-indicator-height: 1em;
-    --media-primary-color: var(--immich-ui-dark);
-    --media-time-range-buffered-color: var(--immich-ui-dark-400);
-    --media-time-range-hover-bottom: 0;
-    --media-time-range-hover-height: 100%;
-    --media-range-thumb-box-shadow: none;
-    --media-range-thumb-opacity: 0;
-    --media-range-thumb-transition: opacity 0.15s ease;
-    --media-range-track-border-radius: 2px;
-    --media-range-track-height: 3.5px;
-    --media-range-padding: 0;
-    --media-settings-menu-background: var(--immich-ui-light-100);
-    --media-text-content-height: var(--text-base--line-height);
-    --media-tooltip-arrow-display: none;
-    --media-tooltip-border-radius: var(--radius-lg);
-    --media-tooltip-background-color: var(--immich-ui-light-200);
-    --media-tooltip-distance: 8px;
-    --media-tooltip-padding: calc(var(--spacing) * 2) calc(var(--spacing) * 3.5);
-  }
-
-  media-time-display {
-    font-variant-numeric: tabular-nums;
-  }
-
-  immich-time-range,
-  media-volume-range {
-    --media-control-hover-background: none;
-  }
-
-  immich-time-range:hover,
-  media-volume-range:hover {
-    --media-range-thumb-opacity: 1;
-  }
-
-  *::part(tooltip) {
-    --media-font-size: var(--text-xs);
-    --media-text-content-height: var(--text-xs--line-height);
-    color: white;
-  }
-
-  *[mediavolumeunavailable] {
-    --media-volume-range-display: none;
-  }
-
-  .volume-wrapper {
-    --media-control-hover-background: none;
-  }
-
-  media-volume-range:has(+ media-mute-button) {
-    padding: 0;
-    margin: 0;
-    width: 0;
-    overflow: hidden;
-    transition: width 0.4s ease-out;
-  }
-
-  /* Expand volume control in all relevant states */
-  .volume-wrapper:hover > media-volume-range,
-  media-volume-range:has(+ media-mute-button:hover),
-  media-volume-range:has(+ media-mute-button:focus),
-  media-volume-range:has(+ media-mute-button:focus-within),
-  media-volume-range:hover,
-  media-volume-range:focus,
-  media-volume-range:focus-within {
-    padding: 0 calc(var(--spacing) * 2);
-    margin-left: calc(var(--spacing) * 2);
-    width: 70px;
-  }
-</style>

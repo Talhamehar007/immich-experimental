@@ -136,3 +136,7 @@ export const autoPlayVideo = persisted<boolean>('auto-play-video', true, {});
 export const alwaysLoadOriginalVideo = persisted<boolean>('always-load-original-video', false, {});
 
 export const recentAlbumsDropdown = persisted<boolean>('recent-albums-open', true, {});
+
+export const videoViewerMuted = persisted<boolean>('video-viewer-muted', false, {});
+
+export const videoViewerVolume = persisted<number>('video-viewer-volume', 1, {});
