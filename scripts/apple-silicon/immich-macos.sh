@@ -236,6 +236,7 @@ cmd_start_server() {
   export REDIS_HOSTNAME="${REDIS_HOSTNAME}"
   export REDIS_PORT="${REDIS_PORT}"
   export REDIS_DBINDEX="${REDIS_DBINDEX}"
+  export IMMICH_BUILD_DATA="${IMMICH_BUILD_DATA:-${REPO_ROOT}/.build_data}"
   export PATH="${SCRIPT_DIR}:${PATH}"
 
   if [ ! -f "${REPO_ROOT}/server/dist/main.js" ]; then
