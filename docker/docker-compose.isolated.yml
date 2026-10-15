@@ -1,0 +1,117 @@
+# ==============================================================================
+# Immich Isolated Development & Native Environment Backing Services
+# ==============================================================================
+# Fully isolated from production Immich containers, networks, and host ports.
+# - Production Immich uses: default network, ports 2283, 5432, 6379, 8901
+# - Isolated Immich uses:   network 'immich_exp_network', ports 3283, 5433, 6380, 3004
+#
+# Usage:
+#   docker compose -f docker/docker-compose.isolated.yml up -d
+#   docker compose -f docker/docker-compose.isolated.yml down
+# ==============================================================================
+
+name: immich_exp
+
+networks:
+  immich_exp_network:
+    name: immich_exp_network
+    driver: bridge
+
+volumes:
+  immich_exp_pgdata:
+    name: immich_exp_pgdata
+  immich_exp_redisdata:
+    name: immich_exp_redisdata
+  immich_exp_model_cache:
+    name: immich_exp_model_cache
+
+services:
+  # Isolated PostgreSQL Database with VectorChord / pgvector
+  immich-exp-database:
+    container_name: immich_exp_postgres
+    image: ghcr.io/immich-app/postgres:14-vectorchord0.4.3-pgvectors0.2.0@sha256:bcf63357191b76a916ae5eb93464d65c07511da41e3bf7a8416db519b40b1c23
+    environment:
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-postgres}
+      POSTGRES_USER: ${DB_USERNAME:-postgres}
+      POSTGRES_DB: ${DB_DATABASE_NAME:-immich_exp}
+      POSTGRES_INITDB_ARGS: '--data-checksums'
+    volumes:
+      - immich_exp_pgdata:/var/lib/postgresql/data
+    ports:
+      # Bound strictly to 127.0.0.1 on port 5433 (never conflicts with default 5432)
+      - '127.0.0.1:${DB_PORT:-5433}:5432'
+    shm_size: 128mb
+    restart: unless-stopped
+    networks:
+      - immich_exp_network
+    healthcheck:
+      test: pg_isready --dbname="$${POSTGRES_DB}" --username="$${POSTGRES_USER}" || exit 1
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # Isolated Redis/Valkey Cache
+  immich-exp-redis:
+    container_name: immich_exp_redis
+    image: docker.io/valkey/valkey:9@sha256:418652cfb58ef879d4978c33553735d7147016032d5aefaa14c828e611eb9dfd
+    volumes:
+      - immich_exp_redisdata:/data
+    ports:
+      # Bound strictly to 127.0.0.1 on port 6380 (never conflicts with default 6379)
+      - '127.0.0.1:${REDIS_PORT:-6380}:6379'
+    restart: unless-stopped
+    networks:
+      - immich_exp_network
+    healthcheck:
+      test: redis-cli ping | grep -q PONG || exit 1
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # Optional: Containerized Server for Isolated Stack (runs when profile 'containers' is specified)
+  immich-exp-server:
+    container_name: immich_exp_server
+    image: ghcr.io/immich-app/immich-server:${IMMICH_VERSION:-release}
+    profiles:
+      - containers
+    volumes:
+      - ${UPLOAD_LOCATION:-~/.immich-exp-data}:/data
+      - /etc/localtime:/etc/localtime:ro
+    environment:
+      - DB_HOSTNAME=immich-exp-database
+      - DB_PORT=5432
+      - DB_USERNAME=${DB_USERNAME:-postgres}
+      - DB_PASSWORD=${DB_PASSWORD:-postgres}
+      - DB_DATABASE_NAME=${DB_DATABASE_NAME:-immich_exp}
+      - REDIS_HOSTNAME=immich-exp-redis
+      - REDIS_PORT=6379
+      - IMMICH_MACHINE_LEARNING_URL=http://immich-exp-machine-learning:3003
+      - IMMICH_PORT=2283
+    ports:
+      # Exposes server to 127.0.0.1:3283 on host (never conflicts with production 2283)
+      - '127.0.0.1:${IMMICH_PORT:-3283}:2283'
+    depends_on:
+      immich-exp-database:
+        condition: service_healthy
+      immich-exp-redis:
+        condition: service_healthy
+    networks:
+      - immich_exp_network
+    restart: unless-stopped
+
+  # Optional: Containerized ML for Isolated Stack (runs when profile 'containers' is specified)
+  immich-exp-machine-learning:
+    container_name: immich_exp_machine_learning
+    image: ghcr.io/immich-app/immich-machine-learning:${IMMICH_VERSION:-release}
+    profiles:
+      - containers
+    volumes:
+      - immich_exp_model_cache:/cache
+    environment:
+      - MACHINE_LEARNING_MODEL_REVISION=v2
+    ports:
+      # Exposes ML to 127.0.0.1:3004 on host
+      - '127.0.0.1:${IMMICH_ML_PORT:-3004}:3003'
+    networks:
+      - immich_exp_network
+    restart: unless-stopped

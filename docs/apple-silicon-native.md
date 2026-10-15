@@ -89,16 +89,31 @@ Start the Immich server on port `3283` (isolated from Docker on 2283):
 ./scripts/apple-silicon/immich-macos.sh start-server
 ```
 
-### Port & Container Isolation
+### Port & Network Isolation Matrix
 To avoid any collision with existing production Immich containers:
-| Service | Default Production Port | Native Apple Silicon Port |
-| :--- | :--- | :--- |
-| Immich Server / Web | `2283` | `3283` (customizable via `IMMICH_PORT`) |
-| Machine Learning | `3003` | `3004` (customizable via `IMMICH_ML_PORT`) |
+| Service | Production Port | Native Isolated Port | Loopback Binding |
+| :--- | :--- | :--- | :--- |
+| Immich Server / Web | `2283` | `3283` | `127.0.0.1:3283` |
+| Machine Learning | `3003` (internal) | `3004` | `127.0.0.1:3004` |
+| PostgreSQL Database | `5432` (internal) | `5433` | `127.0.0.1:5433` |
+| Redis Cache | `6379` | `6380` | `127.0.0.1:6380` |
+| Docker Network | `immich_default` | `immich_exp_network` | Disjoint Bridge |
+
+### Starting Isolated Backing Dependencies
+To start isolated PostgreSQL (`immich_exp_postgres` on port 5433) and Redis (`immich_exp_redis` on port 6380):
+```bash
+./scripts/apple-silicon/immich-macos.sh start-deps
+```
+To stop them:
+```bash
+./scripts/apple-silicon/immich-macos.sh stop-deps
+```
+
+For complete network architecture and security details, see [docs/isolated-environment.md](isolated-environment.md).
 
 ---
 
-## 4. Hardware Verification Suite
+## 4. Hardware & Isolation Verification Suite
 
 Run the full end-to-end automated test suite at any time:
 ```bash
@@ -110,5 +125,6 @@ This verifies:
 2. CoreML Execution Provider registration and tensor calculation accuracy.
 3. Live `h264_videotoolbox` and `hevc_videotoolbox` transcoding speed and stream tagging.
 4. VideoToolbox FFmpeg wrapper argument rewriting.
-5. Isolated FastAPI ML server start/ping/stop lifecycle.
-6. Container safety validation.
+5. Isolated FastAPI ML server start/ping/stop lifecycle on port 3042.
+6. Port and network isolation guarantees (zero overlap with production).
+7. Production container safety validation (confirming production containers remain healthy and untouched).

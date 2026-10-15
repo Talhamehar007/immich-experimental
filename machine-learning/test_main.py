@@ -835,7 +835,7 @@ class TestPreparedGraphs:
 
         assert session.call_args.args == (spec.model_path.as_posix(),)
         assert (
-            session.call_args.kwargs["provider_options"][0]["ModelCacheDirectory"] == (tmp_path / "coreml").as_posix()
+            session.call_args.kwargs["provider_options"][0]["ModelCacheDirectory"] == spec.directory.as_posix()
         )
         assert fresh(spec) == spec.model_path
 

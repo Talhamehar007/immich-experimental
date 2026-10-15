@@ -8,7 +8,7 @@ from socket import socket
 from typing import Any
 
 from gunicorn.arbiter import Arbiter
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from rich.console import Console
 from rich.logging import RichHandler
@@ -66,6 +66,19 @@ class Settings(BaseSettings):
     test_full: bool = False
     test_provider: str | None = None
     execution_providers: list[str] | None = None
+
+    @field_validator("execution_providers", mode="before")
+    @classmethod
+    def _parse_execution_providers(cls, v: Any) -> list[str] | None:
+        if isinstance(v, str):
+            v = v.strip()
+            if not v or v.lower() in ("null", "none"):
+                return None
+            if v.startswith("[") and v.endswith("]"):
+                v = v[1:-1]
+            return [item.strip().strip("'\"") for item in v.split(",") if item.strip()]
+        return v
+
     request_threads: int = os.cpu_count() or 4
     model_inter_op_threads: int = 0
     model_intra_op_threads: int = 0

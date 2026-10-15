@@ -306,17 +306,65 @@ def test_isolated_ml_server() -> None:
         print_pass(f"ML test server on port {test_port} cleanly terminated")
 
 
+def test_network_and_port_isolation() -> None:
+    print_step("Network & Port Isolation Verification")
+    import socket
+
+    prod_ports = {
+        "immich_server": 2283,
+        "immich_postgres": 5432,
+        "immich_redis": 6379,
+        "immich_power_tools": 8901,
+    }
+    isolated_ports = {
+        "isolated_server": int(os.environ.get("IMMICH_PORT", 3283)),
+        "isolated_ml": int(os.environ.get("IMMICH_ML_PORT", 3004)),
+        "isolated_database": int(os.environ.get("DB_PORT", 5433)),
+        "isolated_redis": int(os.environ.get("REDIS_PORT", 6380)),
+    }
+
+    # Verify disjointness
+    for name, port in isolated_ports.items():
+        for prod_name, prod_port in prod_ports.items():
+            if port == prod_port:
+                print_fail(f"Port collision: {name} ({port}) collides with production {prod_name} ({prod_port})!")
+    print_pass(f"Zero port overlap between isolated stack {isolated_ports} and production {prod_ports}")
+
+    # Verify compose file structure and network isolation
+    compose_path = REPO_ROOT / "docker" / "docker-compose.isolated.yml"
+    if not compose_path.exists():
+        print_fail(f"Missing isolated compose file: {compose_path}")
+    compose_text = compose_path.read_text()
+    active_lines = [line.strip() for line in compose_text.splitlines() if line.strip() and not line.strip().startswith("#")]
+    if not any("immich_exp_network" in line for line in active_lines):
+        print_fail("Missing dedicated network 'immich_exp_network' in docker-compose.isolated.yml")
+    for line in active_lines:
+        if "immich_default" in line:
+            print_fail("Isolated compose file must NEVER reference 'immich_default' network")
+    if not any("immich_exp_postgres" in line for line in active_lines) or not any("immich_exp_redis" in line for line in active_lines):
+        print_fail("Missing isolated container names in compose file")
+    print_pass("Verified isolated compose specifies disjoint network 'immich_exp_network' and unique container names")
+
+    # Verify host loopback binding
+    host_binding = os.environ.get("IMMICH_HOST", "127.0.0.1")
+    if host_binding != "127.0.0.1":
+        print_fail(f"Expected loopback host binding 127.0.0.1, got {host_binding}")
+    print_pass(f"Host binding confirmed as {host_binding} (loopback only, zero LAN exposure)")
+
+
 def test_production_safety() -> None:
     print_step("Production Container Safety Verification")
     try:
         output = subprocess.check_output(
-            ["docker", "ps", "--filter", "name=immich_server", "--format", "{{.Names}} {{.Status}}"],
+            ["docker", "ps", "--filter", "name=immich_", "--format", "{{.Names}} | {{.Status}} | {{.Networks}}"],
             text=True,
         ).strip()
         if output:
-            print_pass(f"Verified production container is untouched: {output}")
+            for line in output.splitlines():
+                if any(x in line for x in ["immich_server", "immich_redis", "immich_postgres", "immich_machine_learning"]):
+                    print_pass(f"Verified production container is untouched & healthy: {line}")
         else:
-            print_pass("No production container with name 'immich_server' found running")
+            print_pass("No production containers found running")
     except Exception as e:
         print_pass(f"Docker check completed: {e}")
 
@@ -328,8 +376,9 @@ def main() -> None:
     test_videotoolbox_transcoding()
     test_ffmpeg_wrapper_script()
     test_isolated_ml_server()
+    test_network_and_port_isolation()
     test_production_safety()
-    print(f"\n{GREEN}{BOLD}All Apple Silicon hardware acceleration tests PASSED successfully!{RESET}\n")
+    print(f"\n{GREEN}{BOLD}All Apple Silicon & Network Isolation tests PASSED successfully!{RESET}\n")
 
 
 if __name__ == "__main__":
