@@ -4,9 +4,17 @@ import type { JobOf } from 'src/types.js';
 import { OnEvent, OnJob } from 'src/decorators.js';
 import { SystemConfig } from 'src/dtos/config.dto.js';
 
-import { AssetVisibility, DatabaseLock, ImmichWorker, JobName, JobStatus, QueueName } from 'src/enum.js';
+import { AssetType, AssetVisibility, DatabaseLock, ImmichWorker, JobName, JobStatus, QueueName } from 'src/enum.js';
 import { BaseService } from 'src/services/base.service.js';
-import { batched, getCLIPModelInfo, isSmartSearchEnabled } from 'src/utils/misc.js';
+import {
+  batched,
+  combineEmbeddings,
+  getCLIPModelInfo,
+  isSmartSearchEnabled,
+  parseDurationToSeconds,
+} from 'src/utils/misc.js';
+
+const VIDEO_SAMPLE_FRAMES = 30;
 
 @Injectable()
 export class SmartInfoService extends BaseService {
@@ -100,7 +108,48 @@ export class SmartInfoService extends BaseService {
       return JobStatus.Skipped;
     }
 
-    const embedding = await this.machineLearningRepository.encodeImage(asset.files[0].path, machineLearning.clip);
+    let embedding: string | undefined;
+
+    if (asset.type === AssetType.Video && asset.originalPath) {
+      const durationSeconds = parseDurationToSeconds(asset.duration);
+      const sampleFrames =
+        (await this.mediaRepository.extractVideoSampleFrames(
+          asset.originalPath,
+          VIDEO_SAMPLE_FRAMES,
+          durationSeconds,
+        )) ?? [];
+
+      try {
+        if (sampleFrames.length > 0) {
+          const frameEmbeddings: string[] = [];
+          for (const framePath of sampleFrames) {
+            try {
+              const frameEmb = await this.machineLearningRepository.encodeImage(framePath, machineLearning.clip);
+              if (frameEmb) {
+                frameEmbeddings.push(frameEmb);
+              }
+            } catch (error: any) {
+              this.logger.warn(`Failed to encode video frame ${framePath} for asset ${asset.id}: ${error}`);
+            }
+          }
+
+          if (frameEmbeddings.length > 0) {
+            embedding = combineEmbeddings(frameEmbeddings);
+            this.logger.debug(
+              `Combined ${frameEmbeddings.length} video frame embeddings for asset ${asset.id}`,
+            );
+          }
+        }
+      } finally {
+        if (sampleFrames.length > 0) {
+          await this.mediaRepository.cleanupVideoSampleFrames(sampleFrames);
+        }
+      }
+    }
+
+    if (!embedding) {
+      embedding = await this.machineLearningRepository.encodeImage(asset.files[0].path, machineLearning.clip);
+    }
 
     if (this.databaseRepository.isBusy(DatabaseLock.CLIPDimSize)) {
       this.logger.verbose(`Waiting for CLIP dimension size to be updated`);

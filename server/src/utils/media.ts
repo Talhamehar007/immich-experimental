@@ -1149,6 +1149,10 @@ export class RkmppHwDecodeConfig extends RkmppSwDecodeConfig {
 }
 
 export class VideotoolboxSwDecodeConfig extends BaseHWConfig {
+  getDevice() {
+    return '0';
+  }
+
   eligibleForTwoPass(): boolean {
     return false;
   }

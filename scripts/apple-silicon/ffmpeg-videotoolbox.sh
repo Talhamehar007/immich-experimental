@@ -32,15 +32,21 @@ NEW_ARGS=()
 HW_DECODE="${IMMICH_VT_HW_DECODE:-true}"
 
 if [ "$HW_DECODE" = "true" ]; then
-  # Inject hardware decoding before input arguments if not already specified
+  # Inject hardware decoding before input arguments if -i is present and not lavfi
   has_hwaccel=false
-  for arg in "${ARGS[@]}"; do
+  has_input=false
+  is_lavfi=false
+  for ((idx=0; idx<${#ARGS[@]}; idx++)); do
+    arg="${ARGS[$idx]}"
     if [ "$arg" = "-hwaccel" ]; then
       has_hwaccel=true
-      break
+    elif [ "$arg" = "-i" ]; then
+      has_input=true
+    elif [ "$arg" = "-f" ] && [ "${ARGS[$((idx+1))]:-}" = "lavfi" ]; then
+      is_lavfi=true
     fi
   done
-  if [ "$has_hwaccel" = "false" ]; then
+  if [ "$has_hwaccel" = "false" ] && [ "$has_input" = "true" ] && [ "$is_lavfi" = "false" ]; then
     NEW_ARGS+=("-hwaccel" "videotoolbox")
   fi
 fi

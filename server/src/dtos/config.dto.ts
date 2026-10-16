@@ -571,7 +571,9 @@ export const defaults = Object.freeze<SystemConfig>({
     preferredHwDevice: 'auto',
     transcode: TranscodePolicy.Required,
     tonemap: ToneMapping.Hable,
-    accel: TranscodeHardwareAcceleration.Disabled,
+    accel:
+      (process.env.IMMICH_TRANSCODING_HARDWARE_ACCELERATION as TranscodeHardwareAcceleration) ||
+      TranscodeHardwareAcceleration.Disabled,
     accelDecode: true,
     realtime: {
       enabled: false,

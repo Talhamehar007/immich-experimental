@@ -28,8 +28,9 @@ fi
 
 # Fallback isolated defaults (strictly segregated from production 2283 / 5432 / 6379)
 export IMMICH_HOST="${IMMICH_HOST:-127.0.0.1}"
-export IMMICH_PORT="${IMMICH_PORT:-3283}"
-export SERVER_PORT="${SERVER_PORT:-$IMMICH_PORT}"
+export IMMICH_SERVER_PORT="${IMMICH_PORT:-${SERVER_PORT:-3283}}"
+export IMMICH_PORT="${IMMICH_SERVER_PORT}"
+export SERVER_PORT="${IMMICH_SERVER_PORT}"
 export IMMICH_ML_PORT="${IMMICH_ML_PORT:-3004}"
 export MACHINE_LEARNING_PORT="${MACHINE_LEARNING_PORT:-$IMMICH_ML_PORT}"
 export IMMICH_MACHINE_LEARNING_URL="${IMMICH_MACHINE_LEARNING_URL:-http://127.0.0.1:$IMMICH_ML_PORT}"
@@ -45,6 +46,7 @@ export REDIS_DBINDEX="${REDIS_DBINDEX:-0}"
 export IMMICH_MEDIA_LOCATION="${IMMICH_MEDIA_LOCATION:-${HOME}/immich-experimental-data}"
 export UPLOAD_LOCATION="${UPLOAD_LOCATION:-$IMMICH_MEDIA_LOCATION}"
 export MACHINE_LEARNING_CACHE_FOLDER="${MACHINE_LEARNING_CACHE_FOLDER:-${HOME}/.cache/immich_ml}"
+export MACHINE_LEARNING_MODEL_TTL="${MACHINE_LEARNING_MODEL_TTL:-0}"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -214,6 +216,7 @@ cmd_start_ml() {
   export MACHINE_LEARNING_PORT="${IMMICH_ML_PORT}"
   export MACHINE_LEARNING_CACHE_FOLDER="${MACHINE_LEARNING_CACHE_FOLDER}"
   export IMMICH_MEDIA_LOCATION="${IMMICH_MEDIA_LOCATION}"
+  export MACHINE_LEARNING_MODEL_TTL="${MACHINE_LEARNING_MODEL_TTL}"
 
   cd "${REPO_ROOT}/machine-learning"
   exec uv run python -m immich_ml
@@ -253,16 +256,152 @@ cmd_test() {
   uv run --project "${REPO_ROOT}/machine-learning" python "${SCRIPT_DIR}/test-apple-silicon.py"
 }
 
+cmd_start() {
+  log_info "Starting full isolated Immich stack (Dependencies + Native Apple Silicon ML + Server)..."
+
+  # 1. Start dependencies if not healthy
+  if ! docker inspect --format='{{.State.Health.Status}}' immich_exp_postgres 2>/dev/null | grep -q "healthy"; then
+    cmd_start_deps
+  else
+    log_success "Isolated Postgres container immich_exp_postgres is already healthy."
+  fi
+
+  # 2. Start Native ML
+  if [ -f "${PID_DIR}/ml.pid" ] && kill -0 "$(cat "${PID_DIR}/ml.pid")" 2>/dev/null; then
+    log_info "Native ML is already running (PID: $(cat "${PID_DIR}/ml.pid"))."
+  else
+    log_info "Starting Machine Learning service natively outside Docker on ${IMMICH_HOST}:${IMMICH_ML_PORT}..."
+    mkdir -p "${IMMICH_MEDIA_LOCATION}" "${MACHINE_LEARNING_CACHE_FOLDER}"
+    export IMMICH_HOST="${IMMICH_HOST}"
+    export IMMICH_PORT="${IMMICH_ML_PORT}"
+    export MACHINE_LEARNING_PORT="${IMMICH_ML_PORT}"
+    export MACHINE_LEARNING_CACHE_FOLDER="${MACHINE_LEARNING_CACHE_FOLDER}"
+    export IMMICH_MEDIA_LOCATION="${IMMICH_MEDIA_LOCATION}"
+    export MACHINE_LEARNING_MODEL_TTL="${MACHINE_LEARNING_MODEL_TTL}"
+    nohup uv run --project "${REPO_ROOT}/machine-learning" python -m immich_ml < /dev/null > "${PID_DIR}/ml.log" 2>&1 &
+    local ml_pid=$!
+    echo "$ml_pid" > "${PID_DIR}/ml.pid"
+    log_info "Spawned ML service (PID: $ml_pid). Waiting for readiness..."
+    local attempts=0
+    until curl -s "http://${IMMICH_HOST}:${IMMICH_ML_PORT}/ping" 2>/dev/null | grep -q "pong" || [ $attempts -ge 20 ]; do
+      sleep 1
+      attempts=$((attempts + 1))
+    done
+    if curl -s "http://${IMMICH_HOST}:${IMMICH_ML_PORT}/ping" 2>/dev/null | grep -q "pong"; then
+      log_success "Native ML service is ready at http://${IMMICH_HOST}:${IMMICH_ML_PORT}"
+    else
+      log_warn "ML service did not report ready within timeout. Check ${PID_DIR}/ml.log."
+    fi
+  fi
+
+  # 3. Start Native Immich Server
+  if [ -f "${PID_DIR}/server.pid" ] && kill -0 "$(cat "${PID_DIR}/server.pid")" 2>/dev/null; then
+    log_info "Native Server is already running (PID: $(cat "${PID_DIR}/server.pid"))."
+  else
+    log_info "Starting Immich Server natively outside Docker on ${IMMICH_HOST}:${IMMICH_SERVER_PORT}..."
+    mkdir -p "${IMMICH_MEDIA_LOCATION}"
+    if [ ! -f "${REPO_ROOT}/server/dist/main.js" ]; then
+      log_info "Building server..."
+      pnpm --filter immich run build
+    fi
+    export IMMICH_HOST="${IMMICH_HOST}"
+    export IMMICH_PORT="${IMMICH_SERVER_PORT}"
+    export SERVER_PORT="${IMMICH_SERVER_PORT}"
+    export IMMICH_MACHINE_LEARNING_URL="${IMMICH_MACHINE_LEARNING_URL}"
+    export IMMICH_MEDIA_LOCATION="${IMMICH_MEDIA_LOCATION}"
+    export DB_HOSTNAME="${DB_HOSTNAME}"
+    export DB_PORT="${DB_PORT}"
+    export DB_USERNAME="${DB_USERNAME}"
+    export DB_PASSWORD="${DB_PASSWORD}"
+    export DB_DATABASE_NAME="${DB_DATABASE_NAME}"
+    export REDIS_HOSTNAME="${REDIS_HOSTNAME}"
+    export REDIS_PORT="${REDIS_PORT}"
+    export REDIS_DBINDEX="${REDIS_DBINDEX}"
+    export IMMICH_BUILD_DATA="${IMMICH_BUILD_DATA:-${REPO_ROOT}/.build_data}"
+    export PATH="${SCRIPT_DIR}:${PATH}"
+    nohup node "${REPO_ROOT}/server/dist/main.js" < /dev/null > "${PID_DIR}/server.log" 2>&1 &
+    local server_pid=$!
+    echo "$server_pid" > "${PID_DIR}/server.pid"
+    log_info "Spawned Immich server (PID: $(cat "${PID_DIR}/server.pid")). Waiting for HTTP 200..."
+    local attempts=0
+    until curl -s -f "http://${IMMICH_HOST}:${IMMICH_SERVER_PORT}/api/server/config" >/dev/null 2>&1 || [ $attempts -ge 30 ]; do
+      sleep 1
+      attempts=$((attempts + 1))
+    done
+    if curl -s -f "http://${IMMICH_HOST}:${IMMICH_SERVER_PORT}/api/server/config" >/dev/null 2>&1; then
+      log_success "Immich Server is UP and responding at http://${IMMICH_HOST}:${IMMICH_SERVER_PORT}!"
+    else
+      log_warn "Server did not respond with 200 within timeout. Check ${PID_DIR}/server.log."
+    fi
+  fi
+}
+
+cmd_stop() {
+  log_info "Stopping native Immich services..."
+  if [ -f "${PID_DIR}/server.pid" ]; then
+    local spid
+    spid="$(cat "${PID_DIR}/server.pid" 2>/dev/null || echo '')"
+    if [ -n "$spid" ] && kill -0 "$spid" 2>/dev/null; then
+      kill "$spid" 2>/dev/null || true
+      log_success "Stopped Native Server (PID $spid)."
+    fi
+    rm -f "${PID_DIR}/server.pid"
+  fi
+
+  pkill -f "node dist/main.js" 2>/dev/null || true
+
+  if [ -f "${PID_DIR}/ml.pid" ]; then
+    local mpid
+    mpid="$(cat "${PID_DIR}/ml.pid" 2>/dev/null || echo '')"
+    if [ -n "$mpid" ] && kill -0 "$mpid" 2>/dev/null; then
+      kill "$mpid" 2>/dev/null || true
+      log_success "Stopped Native ML (PID $mpid)."
+    fi
+    rm -f "${PID_DIR}/ml.pid"
+  fi
+
+  pkill -f "immich_ml" 2>/dev/null || true
+
+  if [ "${1:-}" = "--all" ]; then
+    cmd_stop_deps
+  fi
+}
+
+cmd_restart() {
+  cmd_stop
+  sleep 1
+  cmd_start
+}
+
+cmd_logs() {
+  local target="${1:-all}"
+  if [ "$target" = "ml" ]; then
+    tail -f "${PID_DIR}/ml.log"
+  elif [ "$target" = "server" ]; then
+    tail -f "${PID_DIR}/server.log"
+  else
+    log_info "=== Last 25 lines of server.log ==="
+    tail -n 25 "${PID_DIR}/server.log" 2>/dev/null || true
+    echo ""
+    log_info "=== Last 25 lines of ml.log ==="
+    tail -n 25 "${PID_DIR}/ml.log" 2>/dev/null || true
+  fi
+}
+
 cmd_help() {
-  echo "Usage: $0 {doctor|status|start-deps|stop-deps|start-ml|start-server|test}"
+  echo "Usage: $0 {start|stop|restart|logs|doctor|status|start-deps|stop-deps|start-ml|start-server|test}"
   echo ""
   echo "Commands:"
+  echo "  start          Start isolated deps, native ML, and server with auto-readiness verification"
+  echo "  stop           Stop native server and ML processes (pass --all to also stop deps)"
+  echo "  restart        Restart native server and ML processes"
+  echo "  logs [all|ml|server] Tail or view recent runtime logs"
   echo "  doctor         Audit hardware acceleration and verify 100% port/network isolation"
   echo "  status         Inspect running production containers, isolated containers, and native processes"
   echo "  start-deps     Start isolated Postgres (${DB_PORT}) and Redis (${REDIS_PORT}) containers"
   echo "  stop-deps      Stop isolated dependency containers safely without touching production"
-  echo "  start-ml       Start native ML service with CoreML on ${IMMICH_HOST}:${IMMICH_ML_PORT}"
-  echo "  start-server   Start native Immich server on ${IMMICH_HOST}:${IMMICH_PORT}"
+  echo "  start-ml       Start native ML service with CoreML in foreground on ${IMMICH_HOST}:${IMMICH_ML_PORT}"
+  echo "  start-server   Start native Immich server in foreground on ${IMMICH_HOST}:${IMMICH_PORT}"
   echo "  test           Execute Apple Silicon hardware acceleration & network isolation test suite"
   echo ""
   echo "Port Configuration Matrix:"
@@ -274,6 +413,10 @@ cmd_help() {
 }
 
 case "${1:-help}" in
+  start) cmd_start ;;
+  stop) cmd_stop "${2:-}" ;;
+  restart) cmd_restart ;;
+  logs) cmd_logs "${2:-all}" ;;
   doctor) cmd_doctor ;;
   status) cmd_status ;;
   start-deps) cmd_start_deps ;;

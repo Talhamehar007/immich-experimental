@@ -55,18 +55,34 @@
     onClose = () => {},
   }: Props = $props();
 
+  const parseAssetDuration = (value: string | number | null | undefined): number => {
+    if (!value) {
+      return 0;
+    }
+    if (typeof value === 'number') {
+      return Number.isFinite(value) ? value : 0;
+    }
+    const parts = value.split(':').map(Number);
+    if (parts.length === 3 && parts.every(Number.isFinite)) {
+      return parts[0] * 3600 + parts[1] * 60 + parts[2];
+    }
+    const num = Number(value);
+    return Number.isFinite(num) ? num : 0;
+  };
+
   let containerElement: HTMLDivElement | undefined = $state();
   let videoPlayer: HTMLVideoElement | undefined = $state();
   let isLoading = $state(true);
+  let hasLoadedMetadata = $state(false);
   let isPaused = $state(true);
   let currentTime = $state(0);
-  let duration = $state(asset.duration ? asset.duration / 1000 : 0);
+  let duration = $state(parseAssetDuration(asset.duration));
   let buffered: TimeRanges | null = $state(null);
   let playbackRate = $state(1);
   let previousRateBeforeBoost = $state(1);
   let isSpeedBoostActive = $state(false);
   let fitMode: VideoFitMode = $state('contain');
-  let isAutoplayNext = $state(true);
+  let isAutoplayNext = $state(false);
   let isFullscreen = $state(false);
   let isSettingsOpen = $state(false);
   let showStatsForNerds = $state(false);
@@ -108,19 +124,24 @@
   let containerWidth = $state(0);
   let containerHeight = $state(0);
 
+  let useHls = $derived(
+    isLiveTranscoding &&
+      featureFlagsManager.value.realtimeTranscoding &&
+      !playOriginalVideo &&
+      selectedQualityMode !== 'original' &&
+      selectedQualityMode !== 'transcoded',
+  );
+
   // Derived URL based on active quality mode and live transcoding
   let assetFileUrl = $derived.by(() => {
-    if (selectedQualityMode === 'original') {
+    if (selectedQualityMode === 'original' || playOriginalVideo) {
       return getAssetMediaUrl({ id: assetId, size: AssetMediaSize.Original, cacheKey });
     }
     if (selectedQualityMode === 'transcoded') {
       return getAssetPlaybackUrl({ id: assetId, cacheKey });
     }
-    if (isLiveTranscoding && featureFlagsManager.value.realtimeTranscoding) {
+    if (useHls) {
       return getAssetHlsUrl(assetId);
-    }
-    if (playOriginalVideo) {
-      return getAssetMediaUrl({ id: assetId, size: AssetMediaSize.Original, cacheKey });
     }
     return getAssetPlaybackUrl({ id: assetId, cacheKey });
   });
@@ -337,7 +358,7 @@
     statsUpdateTimer = setInterval(() => {
       if (videoPlayer) {
         currentTime = videoPlayer.currentTime;
-        duration = videoPlayer.duration || (asset.duration ? asset.duration / 1000 : 0);
+        duration = videoPlayer.duration || parseAssetDuration(asset.duration);
         buffered = videoPlayer.buffered;
         videoWidth = videoPlayer.videoWidth;
         videoHeight = videoPlayer.videoHeight;
@@ -358,6 +379,9 @@
     }
     if (hideControlsTimer) {
       clearTimeout(hideControlsTimer);
+    }
+    if (playFlashTimer) {
+      clearTimeout(playFlashTimer);
     }
     if (clickTimer) {
       clearTimeout(clickTimer);
@@ -381,6 +405,7 @@
     // When URL or source changes
     if (videoPlayer && assetFileUrl) {
       hasFocused = false;
+      hasLoadedMetadata = false;
       rebuildCount = 0;
       releaseSession();
       if (isHlsElement(videoPlayer)) {
@@ -401,9 +426,17 @@
     }
   };
 
+  const onFullscreenChange = () => {
+    isFullscreen = Boolean(document.fullscreenElement);
+  };
+
   $effect(() => {
     window.addEventListener('pagehide', onPagehide);
-    return () => window.removeEventListener('pagehide', onPagehide);
+    document.addEventListener('fullscreenchange', onFullscreenChange);
+    return () => {
+      window.removeEventListener('pagehide', onPagehide);
+      document.removeEventListener('fullscreenchange', onFullscreenChange);
+    };
   });
 
   const resetHideControlsTimer = () => {
@@ -764,7 +797,7 @@
       currentResolution: `${videoWidth}x${videoHeight}`,
       optimalResolution: asset.width && asset.height ? `${asset.width}x${asset.height}` : 'Auto',
       droppedFrames: totalFramesCount > 0 ? `${droppedFramesCount} / ${totalFramesCount}` : '0',
-      streamType: isLiveTranscoding ? 'HLS Live Transcode' : 'Direct MP4 Stream',
+      streamType: useHls ? 'HLS Live Transcode' : 'Direct MP4 Stream',
       codecs:
         isHlsElement(videoPlayer) && videoPlayer.api?.levels?.[0]?.videoCodec
           ? videoPlayer.api.levels[0].videoCodec
@@ -800,23 +833,19 @@
       onShortcut: () => seekRelative(-10),
     },
     {
-      shortcut: { key: 'l' },
-      onShortcut: () => seekRelative(10),
-    },
-    {
-      shortcut: { key: 'ArrowLeft' },
+      shortcut: { key: 'ArrowLeft', shift: true },
       onShortcut: () => seekRelative(-5),
     },
     {
-      shortcut: { key: 'ArrowRight' },
+      shortcut: { key: 'ArrowRight', shift: true },
       onShortcut: () => seekRelative(5),
     },
     {
-      shortcut: { key: 'ArrowUp' },
+      shortcut: { key: 'ArrowUp', shift: true },
       onShortcut: () => adjustVolume(0.05),
     },
     {
-      shortcut: { key: 'ArrowDown' },
+      shortcut: { key: 'ArrowDown', shift: true },
       onShortcut: () => adjustVolume(-0.05),
     },
     {
@@ -824,56 +853,16 @@
       onShortcut: toggleMute,
     },
     {
-      shortcut: { key: 'f' },
+      shortcut: { key: 'F', shift: true },
       onShortcut: toggleFullscreen,
     },
     {
-      shortcut: { key: 't' },
-      onShortcut: toggleFitMode,
+      shortcut: { key: '[' },
+      onShortcut: () => seekRelative(-1 / 30),
     },
     {
-      shortcut: { key: 'i' },
-      onShortcut: togglePiP,
-    },
-    {
-      shortcut: { key: '0' },
-      onShortcut: () => handleSeek(0),
-    },
-    {
-      shortcut: { key: '1' },
-      onShortcut: () => handleSeek(duration * 0.1),
-    },
-    {
-      shortcut: { key: '2' },
-      onShortcut: () => handleSeek(duration * 0.2),
-    },
-    {
-      shortcut: { key: '3' },
-      onShortcut: () => handleSeek(duration * 0.3),
-    },
-    {
-      shortcut: { key: '4' },
-      onShortcut: () => handleSeek(duration * 0.4),
-    },
-    {
-      shortcut: { key: '5' },
-      onShortcut: () => handleSeek(duration * 0.5),
-    },
-    {
-      shortcut: { key: '6' },
-      onShortcut: () => handleSeek(duration * 0.6),
-    },
-    {
-      shortcut: { key: '7' },
-      onShortcut: () => handleSeek(duration * 0.7),
-    },
-    {
-      shortcut: { key: '8' },
-      onShortcut: () => handleSeek(duration * 0.8),
-    },
-    {
-      shortcut: { key: '9' },
-      onShortcut: () => handleSeek(duration * 0.9),
+      shortcut: { key: ']' },
+      onShortcut: () => seekRelative(1 / 30),
     },
     {
       shortcut: { key: '<' },
@@ -919,15 +908,16 @@
         onpointerup={handleVideoPointerUp}
         onpointercancel={handleVideoPointerUp}
       >
-        {#if isLiveTranscoding && featureFlagsManager.value.realtimeTranscoding}
+        {#if useHls}
           <hls-video
             bind:this={videoPlayer}
             loop={$loopVideoPreference && loopVideo}
             autoplay={$autoPlayVideo}
-            disablePictureInPicture
+            disablePictureInPicture={!extendedControls}
             playsinline
             {...useSwipe(onSwipe)}
             class="size-full {fitMode === 'cover' ? 'object-cover' : 'object-contain'}"
+            onloadedmetadata={() => (hasLoadedMetadata = true)}
             oncanplay={(e: Event) => handleCanPlay(e.currentTarget as HTMLVideoElement)}
             onplay={() => (isPaused = false)}
             onpause={() => (isPaused = true)}
@@ -954,10 +944,11 @@
             src={assetFileUrl}
             loop={$loopVideoPreference && loopVideo}
             autoplay={$autoPlayVideo}
-            disablePictureInPicture
+            disablePictureInPicture={!extendedControls}
             playsinline
             {...useSwipe(onSwipe)}
             class="size-full {fitMode === 'cover' ? 'object-cover' : 'object-contain'}"
+            onloadedmetadata={() => (hasLoadedMetadata = true)}
             oncanplay={(e) => handleCanPlay(e.currentTarget)}
             onplay={() => (isPaused = false)}
             onpause={() => (isPaused = true)}
@@ -993,7 +984,7 @@
       {#if extendedControls}
         <div
           class="absolute inset-x-0 bottom-0 z-30 transition-opacity duration-300 {showControls ||
-          !isPaused ||
+          isPaused ||
           isSettingsOpen ||
           isScrubbing
             ? 'opacity-100'
@@ -1058,7 +1049,7 @@
       {/if}
 
       <!-- Face Editor Overlay -->
-      {#if assetViewerManager.isFaceEditMode && videoPlayer}
+      {#if assetViewerManager.isFaceEditMode && videoPlayer && hasLoadedMetadata}
         <FaceEditor htmlElement={videoPlayer} {containerWidth} {containerHeight} {assetId} />
       {/if}
     {/if}

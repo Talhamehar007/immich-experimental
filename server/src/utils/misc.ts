@@ -382,3 +382,92 @@ export const globToPostgresRegex = (glob: string) => picomatch.makeRe(glob).sour
 export function clamp(value: number, min: number, max: number) {
   return Math.max(min, Math.min(max, value));
 }
+
+export function parseDurationToSeconds(duration: string | number | null | undefined): number {
+  if (!duration) {
+    return 0;
+  }
+  if (typeof duration === 'number') {
+    return Number.isFinite(duration) && duration > 0 ? duration : 0;
+  }
+  const parts = duration.split(':').map(Number);
+  if (parts.length === 3 && parts.every(Number.isFinite)) {
+    return Math.max(0, parts[0] * 3600 + parts[1] * 60 + parts[2]);
+  }
+  if (parts.length === 2 && parts.every(Number.isFinite)) {
+    return Math.max(0, parts[0] * 60 + parts[1]);
+  }
+  const numeric = Number(duration);
+  return Number.isFinite(numeric) && numeric > 0 ? numeric : 0;
+}
+
+export function parseEmbeddingVector(embedding: string): number[] | null {
+  try {
+    const parsed = JSON.parse(embedding);
+    if (Array.isArray(parsed) && parsed.length > 0 && parsed.every((v) => typeof v === 'number' && Number.isFinite(v))) {
+      return parsed;
+    }
+  } catch {
+    // ignore invalid JSON
+  }
+  return null;
+}
+
+export function combineEmbeddings(embeddings: string[]): string {
+  if (embeddings.length === 0) {
+    return '[]';
+  }
+  if (embeddings.length === 1) {
+    return embeddings[0];
+  }
+
+  const vectors = embeddings.map((emb) => parseEmbeddingVector(emb)).filter((v): v is number[] => v !== null);
+  if (vectors.length === 0) {
+    return embeddings[0];
+  }
+
+  const dim = vectors[0].length;
+  const sum = Array.from({ length: dim }, () => 0);
+  let validCount = 0;
+
+  for (const vec of vectors) {
+    if (vec.length !== dim) {
+      continue;
+    }
+    for (let i = 0; i < dim; i++) {
+      sum[i] += vec[i];
+    }
+    validCount++;
+  }
+
+  if (validCount === 0) {
+    return embeddings[0];
+  }
+
+  let normSq = 0;
+  for (let i = 0; i < dim; i++) {
+    normSq += sum[i] * sum[i];
+  }
+  const norm = Math.sqrt(normSq);
+  const scale = norm > 1e-12 ? 1 / norm : 1 / validCount;
+
+  const combined = sum.map((val) => Number((val * scale).toFixed(8)));
+  return JSON.stringify(combined);
+}
+
+export function cosineSimilarity(vecA: number[], vecB: number[]): number {
+  if (vecA.length === 0 || vecA.length !== vecB.length) {
+    return 0;
+  }
+  let dot = 0;
+  let normASq = 0;
+  let normBSq = 0;
+  for (let i = 0; i < vecA.length; i++) {
+    dot += vecA[i] * vecB[i];
+    normASq += vecA[i] * vecA[i];
+    normBSq += vecB[i] * vecB[i];
+  }
+  const denom = Math.sqrt(normASq) * Math.sqrt(normBSq);
+  return denom > 1e-12 ? dot / denom : 0;
+}
+

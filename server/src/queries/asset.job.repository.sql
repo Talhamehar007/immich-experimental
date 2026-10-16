@@ -423,6 +423,9 @@ where
 select
   "asset"."id",
   "asset"."visibility",
+  "asset"."type",
+  "asset"."originalPath",
+  "asset"."duration",
   (
     select
       coalesce(json_agg(agg), '[]')
@@ -449,6 +452,9 @@ where
 select
   "asset"."id",
   "asset"."visibility",
+  "asset"."type",
+  "asset"."originalPath",
+  "asset"."duration",
   to_json("asset_exif") as "exifInfo",
   (
     select

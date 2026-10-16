@@ -28,3 +28,5 @@ vite.config.js.timestamp-*
 .devcontainer/.env*
 *.tsbuildinfo
 *.tsbuildInfo
+.build_data
+.immich-native-run

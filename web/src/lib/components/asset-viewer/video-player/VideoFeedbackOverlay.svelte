@@ -52,7 +52,7 @@
       />
       <div class="h-1.5 w-16 overflow-hidden rounded-full bg-white/20">
         <div
-          class="h-full bg-red-600 transition-[width] duration-75"
+          class="h-full bg-sky-500 transition-[width] duration-75"
           style:width="{volumeFeedback.muted ? 0 : Math.round(volumeFeedback.volume * 100)}%"
         ></div>
       </div>

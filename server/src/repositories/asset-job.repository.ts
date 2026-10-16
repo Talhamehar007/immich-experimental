@@ -223,7 +223,7 @@ export class AssetJobRepository {
   getForClipEncoding(id: string) {
     return this.db
       .selectFrom('asset')
-      .select(['asset.id', 'asset.visibility'])
+      .select(['asset.id', 'asset.visibility', 'asset.type', 'asset.originalPath', 'asset.duration'])
       .select((eb) => withFiles(eb, AssetFileType.Preview))
       .where('asset.id', '=', id)
       .executeTakeFirst();
@@ -233,7 +233,7 @@ export class AssetJobRepository {
   getForDetectFacesJob(id: string) {
     return this.db
       .selectFrom('asset')
-      .select(['asset.id', 'asset.visibility'])
+      .select(['asset.id', 'asset.visibility', 'asset.type', 'asset.originalPath', 'asset.duration'])
       .$call(withExifInner)
       .select((eb) => withFaces(eb, true, true))
       .select((eb) =>

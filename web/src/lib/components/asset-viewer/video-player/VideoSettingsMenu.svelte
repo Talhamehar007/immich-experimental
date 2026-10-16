@@ -151,7 +151,7 @@
             <!-- Toggle Pill Switch -->
             <div
               class="relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out {isLiveTranscoding
-                ? 'bg-red-600'
+                ? 'bg-sky-500'
                 : 'bg-neutral-700'}"
             >
               <span
@@ -176,7 +176,7 @@
           <!-- Toggle Pill Switch -->
           <div
             class="relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out {isLooping
-              ? 'bg-red-600'
+              ? 'bg-sky-500'
               : 'bg-neutral-700'}"
           >
             <span
@@ -202,7 +202,7 @@
           <!-- Toggle Pill Switch -->
           <div
             class="relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out {showStatsForNerds
-              ? 'bg-red-600'
+              ? 'bg-sky-500'
               : 'bg-neutral-700'}"
           >
             <span
@@ -230,7 +230,7 @@
             <button
               type="button"
               class="flex w-full items-center justify-between px-3.5 py-2 text-left transition-colors hover:bg-white/10 active:bg-white/15 {isSelected
-                ? 'font-medium text-red-500'
+                ? 'font-medium text-sky-400'
                 : 'text-neutral-200'}"
               onclick={() => {
                 onSelectQuality(quality);
@@ -246,7 +246,7 @@
                 {/if}
               </div>
               {#if isSelected}
-                <Icon icon={mdiCheck} size="18" class="text-red-500" />
+                <Icon icon={mdiCheck} size="18" class="text-sky-400" />
               {/if}
             </button>
           {/each}
@@ -275,7 +275,7 @@
             >
               -
             </button>
-            <span class="w-12 text-center text-xs font-semibold text-red-500 tabular-nums">
+            <span class="w-12 text-center text-xs font-semibold text-sky-400 tabular-nums">
               {currentSpeed.toFixed(2)}x
             </span>
             <button
@@ -294,7 +294,7 @@
             <button
               type="button"
               class="flex w-full items-center justify-between px-3.5 py-2 text-left transition-colors hover:bg-white/10 active:bg-white/15 {isSelected
-                ? 'font-medium text-red-500'
+                ? 'font-medium text-sky-400'
                 : 'text-neutral-200'}"
               onclick={() => {
                 onSelectSpeed(speed.rate);
@@ -303,7 +303,7 @@
             >
               <span class="text-sm">{speed.label}</span>
               {#if isSelected}
-                <Icon icon={mdiCheck} size="18" class="text-red-500" />
+                <Icon icon={mdiCheck} size="18" class="text-sky-400" />
               {/if}
             </button>
           {/each}

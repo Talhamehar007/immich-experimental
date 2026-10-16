@@ -30,6 +30,7 @@ import {
   mapPersonUsers,
 } from 'src/dtos/person.dto.js';
 import {
+  AssetType,
   AssetVisibility,
   CacheControl,
   JobName,
@@ -41,7 +42,7 @@ import {
   SystemMetadataKey,
   VectorIndex,
 } from 'src/enum.js';
-import { BoundingBox } from 'src/repositories/machine-learning.repository.js';
+import { BoundingBox, Face } from 'src/repositories/machine-learning.repository.js';
 import { PersonId } from 'src/repositories/person.repository.js';
 import { DB } from 'src/schema/index.js';
 import { AssetFaceTable } from 'src/schema/tables/asset-face.table.js';
@@ -52,9 +53,19 @@ import { getDimensions, getMyPartnerIds } from 'src/utils/asset.util.js';
 import { ImmichFileResponse } from 'src/utils/file.js';
 import { isHttpException } from 'src/utils/logger.js';
 import { mimeTypes } from 'src/utils/mime-types.js';
-import { batched, findOrFail, hasSomeDefined, isFacialRecognitionEnabled } from 'src/utils/misc.js';
+import {
+  batched,
+  combineEmbeddings,
+  cosineSimilarity,
+  findOrFail,
+  hasSomeDefined,
+  isFacialRecognitionEnabled,
+  parseDurationToSeconds,
+  parseEmbeddingVector,
+} from 'src/utils/misc.js';
 import { Point, transformPoints } from 'src/utils/transform.js';
 
+const VIDEO_SAMPLE_FRAMES = 30;
 const personKey = ({ ownerId, personGroupId }: PersonId) => `${ownerId}/${personGroupId}`;
 
 @Injectable()
@@ -409,11 +420,115 @@ export class PersonService extends BaseService {
       return JobStatus.Skipped;
     }
 
-    const { imageHeight, imageWidth, faces } = await this.machineLearningRepository.detectFaces(
-      previewFile.path,
-      machineLearning.facialRecognition,
-    );
-    this.logger.debug(`${faces.length} faces detected in ${previewFile.path}`);
+    let detectionResult: { imageHeight: number; imageWidth: number; faces: Face[] } | undefined;
+
+    if (asset.type === AssetType.Video && asset.originalPath) {
+      const durationSeconds = parseDurationToSeconds(asset.duration);
+      const sampleFrames =
+        (await this.mediaRepository.extractVideoSampleFrames(
+          asset.originalPath,
+          VIDEO_SAMPLE_FRAMES,
+          durationSeconds,
+        )) ?? [];
+
+      try {
+        if (sampleFrames.length > 0) {
+          const minSimilarity = Math.max(0.45, 1 - (machineLearning.facialRecognition.maxDistance ?? 0.5));
+          const clusters: Array<{
+            bestFace: Face;
+            imageHeight: number;
+            imageWidth: number;
+            embeddings: string[];
+            centroid: number[] | null;
+          }> = [];
+          let firstHeight = 0;
+          let firstWidth = 0;
+          let processedFrames = 0;
+
+          for (const framePath of sampleFrames) {
+            try {
+              const frameRes = await this.machineLearningRepository.detectFaces(
+                framePath,
+                machineLearning.facialRecognition,
+              );
+              processedFrames++;
+              if (!firstHeight && frameRes.imageHeight) {
+                firstHeight = frameRes.imageHeight;
+                firstWidth = frameRes.imageWidth;
+              }
+
+              for (const face of frameRes.faces) {
+                const vec = parseEmbeddingVector(face.embedding);
+                let bestClusterIndex = -1;
+                let bestSim = -1;
+
+                if (vec) {
+                  for (const [idx, cluster] of clusters.entries()) {
+                    if (!cluster.centroid) {
+                      continue;
+                    }
+                    const sim = cosineSimilarity(vec, cluster.centroid);
+                    if (sim >= minSimilarity && sim > bestSim) {
+                      bestSim = sim;
+                      bestClusterIndex = idx;
+                    }
+                  }
+                }
+
+                if (bestClusterIndex !== -1) {
+                  const cluster = clusters[bestClusterIndex];
+                  cluster.embeddings.push(face.embedding);
+                  cluster.centroid = parseEmbeddingVector(combineEmbeddings(cluster.embeddings));
+                  if ((face.score ?? 0) > (cluster.bestFace.score ?? 0)) {
+                    cluster.bestFace = face;
+                    cluster.imageHeight = frameRes.imageHeight;
+                    cluster.imageWidth = frameRes.imageWidth;
+                  }
+                } else {
+                  clusters.push({
+                    bestFace: face,
+                    imageHeight: frameRes.imageHeight,
+                    imageWidth: frameRes.imageWidth,
+                    embeddings: [face.embedding],
+                    centroid: vec,
+                  });
+                }
+              }
+            } catch (error: any) {
+              this.logger.warn(`Failed to detect faces in video frame ${framePath} for asset ${asset.id}: ${error}`);
+            }
+          }
+
+          if (processedFrames > 0) {
+            const imageHeight = clusters[0]?.imageHeight || firstHeight || 1;
+            const imageWidth = clusters[0]?.imageWidth || firstWidth || 1;
+            const faces: Face[] = clusters.map((cluster) => ({
+              boundingBox: cluster.bestFace.boundingBox,
+              score: cluster.bestFace.score,
+              embedding: combineEmbeddings(cluster.embeddings),
+            }));
+            detectionResult = { imageHeight, imageWidth, faces };
+            this.logger.debug(
+              `${faces.length} unique face(s) clustered across ${processedFrames} sampled frames for video ${asset.id}`,
+            );
+          }
+        }
+      } finally {
+        if (sampleFrames.length > 0) {
+          await this.mediaRepository.cleanupVideoSampleFrames(sampleFrames);
+        }
+      }
+    }
+
+    if (!detectionResult) {
+      detectionResult = await this.machineLearningRepository.detectFaces(
+        previewFile.path,
+        machineLearning.facialRecognition,
+      );
+      this.logger.debug(`${detectionResult.faces.length} faces detected in ${previewFile.path}`);
+    }
+
+    const { imageHeight, imageWidth, faces } = detectionResult;
 
     const facesToAdd: (Insertable<AssetFaceTable> & { id: string })[] = [];
     const embeddings: FaceSearchTable[] = [];

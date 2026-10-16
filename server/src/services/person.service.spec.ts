@@ -1,7 +1,7 @@
 import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { BulkIdErrorReason } from 'src/dtos/asset-ids.response.dto.js';
 import { PeopleUsersUpsertType, PersonUserRole, mapFaces, mapPerson } from 'src/dtos/person.dto.js';
-import { AssetFileType, CacheControl, JobName, JobStatus, SourceType, SystemMetadataKey } from 'src/enum.js';
+import { AssetFileType, AssetType, CacheControl, JobName, JobStatus, SourceType, SystemMetadataKey } from 'src/enum.js';
 import { PersonService } from 'src/services/person.service.js';
 import { ImmichFileResponse } from 'src/utils/file.js';
 import { AssetFaceFactory } from 'test/factories/asset-face.factory.js';
@@ -1219,6 +1219,89 @@ describe(PersonService.name, () => {
       ]);
       expect(mocks.person.reassignFace).not.toHaveBeenCalled();
       expect(mocks.person.reassignFaces).not.toHaveBeenCalled();
+    });
+
+    it('should sample frames from video assets, cluster faces across frames, and combine their embeddings', async () => {
+      const assetId = newUuid();
+      const faceId1 = newUuid();
+      const faceId2 = newUuid();
+      const asset = AssetFactory.from({
+        id: assetId,
+        type: AssetType.Video,
+        originalPath: '/videos/clip.mp4',
+        duration: '0:00:20.000000',
+      })
+        .file({ type: AssetFileType.Preview })
+        .exif()
+        .build();
+      const sampledFrames = ['/tmp/immich-video-frames-abc/frame_001.jpg', '/tmp/immich-video-frames-abc/frame_002.jpg'];
+
+      mocks.assetJob.getForDetectFacesJob.mockResolvedValue(getForDetectedFaces(asset));
+      mocks.media.extractVideoSampleFrames.mockResolvedValue(sampledFrames);
+      mocks.crypto.randomUUID.mockReturnValueOnce(faceId1).mockReturnValueOnce(faceId2);
+      mocks.person.refreshFaces.mockResolvedValue();
+
+      // Frame 1 has Person A (score 0.8) and Person B (score 0.85)
+      // Frame 2 has Person A again (higher score 0.95, slightly shifted bounding box)
+      mocks.machineLearning.detectFaces
+        .mockResolvedValueOnce({
+          imageHeight: 1080,
+          imageWidth: 1920,
+          faces: [
+            {
+              boundingBox: { x1: 10, y1: 10, x2: 110, y2: 110 },
+              embedding: '[1, 0, 0, 0]',
+              score: 0.8,
+            },
+            {
+              boundingBox: { x1: 500, y1: 200, x2: 600, y2: 300 },
+              embedding: '[0, 1, 0, 0]',
+              score: 0.85,
+            },
+          ],
+        })
+        .mockResolvedValueOnce({
+          imageHeight: 1080,
+          imageWidth: 1920,
+          faces: [
+            {
+              boundingBox: { x1: 20, y1: 20, x2: 120, y2: 120 },
+              embedding: '[0.98, 0.02, 0, 0]',
+              score: 0.95,
+            },
+          ],
+        });
+
+      await expect(sut.handleDetectFaces({ id: asset.id })).resolves.toBe(JobStatus.Success);
+
+      expect(mocks.media.extractVideoSampleFrames).toHaveBeenCalledWith('/videos/clip.mp4', 30, 20);
+      expect(mocks.machineLearning.detectFaces).toHaveBeenCalledTimes(2);
+      expect(mocks.person.refreshFaces).toHaveBeenCalledWith(
+        [
+          expect.objectContaining({
+            id: faceId1,
+            assetId: asset.id,
+            boundingBoxX1: 20,
+            boundingBoxY1: 20,
+            boundingBoxX2: 120,
+            boundingBoxY2: 120,
+          }),
+          expect.objectContaining({
+            id: faceId2,
+            assetId: asset.id,
+            boundingBoxX1: 500,
+            boundingBoxY1: 200,
+            boundingBoxX2: 600,
+            boundingBoxY2: 300,
+          }),
+        ],
+        [],
+        [
+          { faceId: faceId1, embedding: '[0.99994899,0.01010049,0,0]' },
+          { faceId: faceId2, embedding: '[0, 1, 0, 0]' },
+        ],
+      );
+      expect(mocks.media.cleanupVideoSampleFrames).toHaveBeenCalledWith(sampledFrames);
     });
   });
 

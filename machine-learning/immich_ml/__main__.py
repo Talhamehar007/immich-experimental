@@ -1,6 +1,7 @@
 import os
 import signal
 import subprocess
+import sys
 from ipaddress import ip_address
 from pathlib import Path
 
@@ -30,6 +31,25 @@ bind_host = non_prefixed_settings.immich_host
 if is_ipv6(bind_host):
     bind_host = f"[{bind_host}]"
 bind_address = f"{bind_host}:{non_prefixed_settings.immich_port}"
+
+if sys.platform == "darwin":
+    # On macOS, UNIX fork() without exec() invalidates Mach bootstrap ports to Apple Metal (MTLCompilerService)
+    # and CoreML MPSKernelDAG. Run uvicorn directly in-process so Metal / Neural Engine kernels compile cleanly.
+    import asyncio
+    import uvicorn
+    from .config import CustomUvicornServer
+
+    clean_host = bind_host.strip("[]")
+    config = uvicorn.Config(
+        "immich_ml.main:app",
+        host=clean_host,
+        port=non_prefixed_settings.immich_port,
+        timeout_keep_alive=settings.http_keepalive_timeout_s,
+        log_config=None,
+    )
+    server = CustomUvicornServer(config=config)
+    asyncio.run(server.serve())
+    exit(0)
 
 try:
     with subprocess.Popen(

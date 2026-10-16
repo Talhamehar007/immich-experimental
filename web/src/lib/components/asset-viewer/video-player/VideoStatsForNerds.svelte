@@ -16,7 +16,7 @@
 >
   <div class="mb-2 flex items-center justify-between border-b border-white/10 pb-1.5">
     <div class="flex items-center gap-1.5 font-bold tracking-wide text-white uppercase">
-      <span class="inline-block size-2 rounded-full bg-red-500"></span>
+      <span class="inline-block size-2 rounded-full bg-sky-400"></span>
       <span>Stats for nerds</span>
     </div>
     <button

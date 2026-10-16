@@ -1,5 +1,5 @@
 import { SystemConfig } from 'src/dtos/config.dto.js';
-import { AssetFileType, AssetVisibility, ImmichWorker, JobName, JobStatus } from 'src/enum.js';
+import { AssetFileType, AssetType, AssetVisibility, ImmichWorker, JobName, JobStatus } from 'src/enum.js';
 import { SmartInfoService } from 'src/services/smart-info.service.js';
 import { getCLIPModelInfo } from 'src/utils/misc.js';
 import { AssetFactory } from 'test/factories/asset.factory.js';
@@ -246,6 +246,29 @@ describe(SmartInfoService.name, () => {
         expect.objectContaining({ modelName: 'ViT-B-32__openai' }),
       );
       expect(mocks.search.upsert).toHaveBeenCalledWith(asset.id, '[0.01, 0.02, 0.03]');
+    });
+
+    it('should sample video frames and compute a combined L2-normalized embedding for video assets', async () => {
+      const asset = AssetFactory.from({
+        type: AssetType.Video,
+        originalPath: '/videos/sample.mp4',
+        duration: '0:00:15.000000',
+      })
+        .file({ type: AssetFileType.Preview })
+        .build();
+      const sampledFrames = ['/tmp/immich-video-frames-123/frame_001.jpg', '/tmp/immich-video-frames-123/frame_002.jpg'];
+      mocks.assetJob.getForClipEncoding.mockResolvedValue(asset);
+      mocks.media.extractVideoSampleFrames.mockResolvedValue(sampledFrames);
+      mocks.machineLearning.encodeImage
+        .mockResolvedValueOnce('[1, 0]')
+        .mockResolvedValueOnce('[0, 1]');
+
+      expect(await sut.handleEncodeClip({ id: asset.id })).toEqual(JobStatus.Success);
+
+      expect(mocks.media.extractVideoSampleFrames).toHaveBeenCalledWith('/videos/sample.mp4', 30, 15);
+      expect(mocks.machineLearning.encodeImage).toHaveBeenCalledTimes(2);
+      expect(mocks.search.upsert).toHaveBeenCalledWith(asset.id, '[0.70710678,0.70710678]');
+      expect(mocks.media.cleanupVideoSampleFrames).toHaveBeenCalledWith(sampledFrames);
     });
   });
 

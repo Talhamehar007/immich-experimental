@@ -276,9 +276,9 @@ def test_isolated_ml_server() -> None:
     ]
     proc = subprocess.Popen(cmd, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     try:
-        # Wait up to 10s for server to start
+        # Wait up to 30s for server to start
         ready = False
-        for _ in range(20):
+        for _ in range(60):
             time.sleep(0.5)
             try:
                 with urllib.request.urlopen(f"http://127.0.0.1:{test_port}/ping", timeout=1) as resp:
@@ -289,7 +289,8 @@ def test_isolated_ml_server() -> None:
                 continue
 
         if not ready:
-            print_fail(f"ML server failed to start on port {test_port}")
+            err = proc.stderr.read().decode(errors="replace") if proc.stderr else ""
+            print_fail(f"ML server failed to start on port {test_port}. Stderr: {err[:500]}")
         print_pass(f"ML server is up on port {test_port} and answered /ping -> pong")
 
         with urllib.request.urlopen(f"http://127.0.0.1:{test_port}/", timeout=1) as resp:

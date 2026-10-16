@@ -157,16 +157,16 @@
       ></div>
     {/if}
 
-    <!-- Played Track (YouTube Red) -->
+    <!-- Played Track (Immich Theme) -->
     <div
-      class="absolute inset-y-0 left-0 bg-red-600 transition-[width] duration-75"
+      class="absolute inset-y-0 left-0 bg-primary transition-[width] duration-75"
       style:width="{progressPercent}%"
     ></div>
   </div>
 
-  <!-- Scrubber Handle / Thumb (expands on hover/drag like YouTube) -->
+  <!-- Scrubber Handle / Thumb (expands on hover/drag) -->
   <div
-    class="pointer-events-none absolute top-1/2 -translate-1/2 rounded-full bg-red-600 shadow-sm transition-transform duration-150 {isHovering ||
+    class="pointer-events-none absolute top-1/2 -translate-1/2 rounded-full bg-primary shadow-sm transition-transform duration-150 {isHovering ||
     isDragging
       ? 'scale-100'
       : 'scale-0'}"

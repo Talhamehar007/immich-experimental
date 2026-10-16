@@ -3878,6 +3878,23 @@ describe(MediaService.name, () => {
       );
     });
 
+    it('should succeed with videotoolbox on macOS when dri devices are empty', async () => {
+      sut.videoInterfaces = { dri: [], mali: false };
+      mocks.assetJob.getForVideoConversion.mockResolvedValue({ ...asset, ...probeStub.matroskaContainer });
+      mocks.systemMetadata.get.mockResolvedValue({
+        ffmpeg: { accel: TranscodeHardwareAcceleration.Videotoolbox, accelDecode: true },
+      });
+      await expect(sut.handleVideoConversion({ id: 'video-id' })).resolves.toBe(JobStatus.Success);
+      expect(mocks.media.transcode).toHaveBeenCalledWith(
+        '/original/path.ext',
+        expect.any(String),
+        expect.objectContaining({
+          inputOptions: expect.arrayContaining(['-hwaccel', 'videotoolbox']),
+          outputOptions: expect.arrayContaining(['-c:v', 'h264_videotoolbox', '-allow_sw', '1']),
+        }),
+      );
+    });
+
     it('should tonemap when policy is required and video is hdr', async () => {
       mocks.assetJob.getForVideoConversion.mockResolvedValue({ ...asset, ...probeStub.videoStreamHDR });
       mocks.systemMetadata.get.mockResolvedValue({ ffmpeg: { transcode: TranscodePolicy.Required } });

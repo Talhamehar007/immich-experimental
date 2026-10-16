@@ -225,7 +225,7 @@
             step="0.05"
             aria-label="Volume"
             value={isMuted ? 0 : volume}
-            class="h-1 w-16 cursor-pointer appearance-none rounded-full bg-white/30 accent-red-600 transition-colors hover:bg-white/50"
+            class="h-1 w-16 cursor-pointer appearance-none rounded-full bg-white/30 accent-sky-500 transition-colors hover:bg-white/50"
             oninput={(e) => onVolumeChange(Number((e.currentTarget as HTMLInputElement).value))}
           />
         </div>
@@ -250,7 +250,7 @@
         aria-label={isAutoplayNext ? 'Autoplay is on' : 'Autoplay is off'}
         title={isAutoplayNext ? 'Autoplay is on' : 'Autoplay is off'}
         class="flex size-9 items-center justify-center rounded-full text-white/90 transition-all hover:bg-white/15 hover:text-white active:scale-95 {isAutoplayNext
-          ? 'text-red-500'
+          ? 'text-sky-400'
           : 'text-white/60'}"
         onclick={onToggleAutoplayNext}
       >
@@ -296,7 +296,7 @@
           <!-- YouTube HD Badge on Gear Icon -->
           {#if isHdOrBetter}
             <span
-              class="px-0.8 py-0.2 absolute -top-0.5 -right-0.5 rounded-sm bg-red-600 text-[8px] font-black tracking-tight text-white uppercase shadow-sm"
+              class="px-0.8 py-0.2 absolute -top-0.5 -right-0.5 rounded-sm bg-sky-500 text-[8px] font-black tracking-tight text-white uppercase shadow-sm"
             >
               HD
             </span>

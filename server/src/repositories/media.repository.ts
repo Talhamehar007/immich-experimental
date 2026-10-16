@@ -5,6 +5,8 @@ import { camelCase, upperFirst } from 'lodash-es';
 import { Duration } from 'luxon';
 import { spawn } from 'node:child_process';
 import fs from 'node:fs/promises';
+import os from 'node:os';
+import { dirname, join } from 'node:path';
 import { Writable } from 'node:stream';
 import sharp, { Sharp } from 'sharp';
 import type {
@@ -435,6 +437,91 @@ export class MediaRepository {
   async getImageMetadata(input: string | Buffer): Promise<ImageDimensions & { isTransparent: boolean }> {
     const { width = 0, height = 0, hasAlpha = false } = await sharp(input, { unlimited: true }).metadata();
     return { width, height, isTransparent: hasAlpha };
+  }
+
+  async extractVideoSampleFrames(input: string, maxFrames = 30, durationSeconds?: number): Promise<string[]> {
+    if (!input || maxFrames <= 0) {
+      return [];
+    }
+
+    let duration = durationSeconds && Number.isFinite(durationSeconds) && durationSeconds > 0 ? durationSeconds : 0;
+    if (!duration) {
+      try {
+        const info = await this.probe(input);
+        duration = info.format.duration > 0 ? info.format.duration : 0;
+      } catch (error: any) {
+        this.logger.debug(`Could not probe video duration for frame sampling (${input}): ${error?.message ?? error}`);
+      }
+    }
+
+    const targetFrames = duration > 0 ? Math.max(1, Math.min(maxFrames, Math.ceil(duration * 2))) : maxFrames;
+    const vfFilter =
+      duration > 0
+        ? `fps=${Math.max(0.01, targetFrames / duration).toFixed(6)},scale='min(1080,iw)':-2`
+        : `thumbnail=15,scale='min(1080,iw)':-2`;
+
+    const tempDir = await fs.mkdtemp(join(os.tmpdir(), 'immich-video-frames-'));
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const args = [
+          '-nostdin',
+          '-y',
+          '-v',
+          'error',
+          '-i',
+          input,
+          '-vf',
+          vfFilter,
+          ...(duration > 0 ? [] : ['-vsync', 'vfr']),
+          '-frames:v',
+          String(targetFrames),
+          '-q:v',
+          '2',
+          join(tempDir, 'frame_%03d.jpg'),
+        ];
+        const proc = spawn('ffmpeg', args, { stdio: ['ignore', 'ignore', 'pipe'] });
+        let stderr = '';
+        proc.stderr.setEncoding('utf8');
+        proc.stderr.on('data', (chunk: string) => (stderr += chunk));
+        proc.on('error', reject);
+        proc.on('close', (code) => {
+          if (code !== 0) {
+            reject(new Error(`ffmpeg frame extraction exited with code ${code}: ${stderr.trim()}`));
+          } else {
+            resolve();
+          }
+        });
+      });
+
+      const entries = await fs.readdir(tempDir);
+      const framePaths = entries
+        .filter((name) => name.endsWith('.jpg'))
+        .sort()
+        .map((name) => join(tempDir, name));
+
+      if (framePaths.length === 0) {
+        await fs.rm(tempDir, { recursive: true, force: true }).catch(() => {});
+        return [];
+      }
+
+      return framePaths;
+    } catch (error: any) {
+      this.logger.warn(`Failed to extract sample frames from video ${input}: ${error?.message ?? error}`);
+      await fs.rm(tempDir, { recursive: true, force: true }).catch(() => {});
+      return [];
+    }
+  }
+
+  async cleanupVideoSampleFrames(framePaths: string[]): Promise<void> {
+    if (!framePaths || framePaths.length === 0) {
+      return;
+    }
+    const dirs = new Set(framePaths.map((p) => dirname(p)));
+    await Promise.all(
+      [...dirs]
+        .filter((dir) => dir.includes('immich-video-frames-'))
+        .map((dir) => fs.rm(dir, { recursive: true, force: true }).catch(() => {})),
+    );
   }
 
   private configureFfmpegCall(input: string, output: string | Writable, options: TranscodeCommand) {
