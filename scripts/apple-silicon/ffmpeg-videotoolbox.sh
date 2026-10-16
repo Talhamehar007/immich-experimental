@@ -105,8 +105,31 @@ while [ $i -lt ${#ARGS[@]} ]; do
       ;;
   esac
 
+  if [[ "$arg" == *"tonemapx="* ]]; then
+    arg="$(echo "$arg" | sed -E 's/tonemapx=[^,]*/format=yuv420p/g')"
+  fi
+
   NEW_ARGS+=("$arg")
   i=$((i + 1))
 done
 
+# Homebrew ffmpeg 9.x omits libwebp by default; transparently encode .webp outputs via cwebp
+if [ ${#NEW_ARGS[@]} -gt 0 ]; then
+  last_idx=$((${#NEW_ARGS[@]} - 1))
+  out_arg="${NEW_ARGS[$last_idx]}"
+  if [[ "$out_arg" == *.webp ]]; then
+    CWEBP_BIN="${IMMICH_CWEBP:-$(command -v cwebp || echo "/opt/homebrew/bin/cwebp")}"
+    if [ -x "$CWEBP_BIN" ] && ! "$REAL_FFMPEG" -hide_banner -encoders 2>/dev/null | grep -q "libwebp"; then
+      tmp_png="${out_arg}.tmp.$$.png"
+      NEW_ARGS[$last_idx]="$tmp_png"
+      trap 'rm -f "$tmp_png"' EXIT
+      "$REAL_FFMPEG" "${NEW_ARGS[@]}"
+      "$CWEBP_BIN" -quiet -q 85 "$tmp_png" -o "$out_arg"
+      rm -f "$tmp_png"
+      exit 0
+    fi
+  fi
+fi
+
 exec "$REAL_FFMPEG" "${NEW_ARGS[@]}"
+

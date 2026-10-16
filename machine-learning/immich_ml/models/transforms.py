@@ -6,7 +6,9 @@ import cv2
 import numpy as np
 import orjson
 from numpy.typing import NDArray
-from PIL import Image
+from PIL import Image, ImageFile
+
+ImageFile.LOAD_TRUNCATED_IMAGES = True
 
 _PIL_RESAMPLING_METHODS = {resampling.name.lower(): resampling for resampling in Image.Resampling}
 _PUNCTUATION_TRANS = str.maketrans("", "", string.punctuation)

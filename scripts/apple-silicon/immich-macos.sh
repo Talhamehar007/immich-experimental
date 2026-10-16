@@ -240,6 +240,7 @@ cmd_start_server() {
   export REDIS_PORT="${REDIS_PORT}"
   export REDIS_DBINDEX="${REDIS_DBINDEX}"
   export IMMICH_BUILD_DATA="${IMMICH_BUILD_DATA:-${REPO_ROOT}/.build_data}"
+  export FFMPEG_PATH="${SCRIPT_DIR}/ffmpeg-videotoolbox.sh"
   export PATH="${SCRIPT_DIR}:${PATH}"
 
   if [ ! -f "${REPO_ROOT}/server/dist/main.js" ]; then
@@ -318,6 +319,7 @@ cmd_start() {
     export REDIS_PORT="${REDIS_PORT}"
     export REDIS_DBINDEX="${REDIS_DBINDEX}"
     export IMMICH_BUILD_DATA="${IMMICH_BUILD_DATA:-${REPO_ROOT}/.build_data}"
+    export FFMPEG_PATH="${SCRIPT_DIR}/ffmpeg-videotoolbox.sh"
     export PATH="${SCRIPT_DIR}:${PATH}"
     local server_pid
     server_pid="$(python3 -c 'import subprocess, sys; f=open(sys.argv[1], "ab"); p=subprocess.Popen(sys.argv[2:], stdin=subprocess.DEVNULL, stdout=f, stderr=subprocess.STDOUT, start_new_session=True); print(p.pid)' "${PID_DIR}/server.log" node "${REPO_ROOT}/server/dist/main.js")"

@@ -157,14 +157,21 @@ export class MediaRepository {
       const decoded = await this.getImageDecodingPipeline(input, options).raw().toBuffer({ resolveWithObject: true });
       return await this.transform(decoded, options);
     } catch (error: any) {
+      const lenientOptions: DecodeToBufferOptions = { ...options, processInvalidImages: true };
       if (typeof input === 'string') {
         const extracted = await this.extract(input);
         if (extracted?.buffer) {
-          const decoded = await this.getImageDecodingPipeline(extracted.buffer, options)
+          const decoded = await this.getImageDecodingPipeline(extracted.buffer, lenientOptions)
             .raw()
             .toBuffer({ resolveWithObject: true });
-          return await this.transform(decoded, options);
+          return await this.transform(decoded, lenientOptions);
         }
+      }
+      if (!options.processInvalidImages) {
+        const decoded = await this.getImageDecodingPipeline(input, lenientOptions)
+          .raw()
+          .toBuffer({ resolveWithObject: true });
+        return await this.transform(decoded, lenientOptions);
       }
       throw error;
     }
@@ -413,7 +420,27 @@ export class MediaRepository {
     if (!options.twoPass) {
       return new Promise((resolve, reject) => {
         this.configureFfmpegCall(input, output, options)
-          .on('error', reject)
+          .on('error', async (err) => {
+            if (typeof output === 'string' && /\.(webp|avif)$/i.test(output)) {
+              const tmpJpg = `${output}.tmp.jpg`;
+              try {
+                await new Promise<void>((res, rej) => {
+                  this.configureFfmpegCall(input, tmpJpg, options)
+                    .on('error', rej)
+                    .on('end', () => res())
+                    .run();
+                });
+                const fmt = output.toLowerCase().endsWith('.avif') ? 'avif' : 'webp';
+                await sharp(tmpJpg).toFormat(fmt, { quality: 80 }).toFile(output);
+                await fs.unlink(tmpJpg).catch(() => {});
+                resolve();
+                return;
+              } catch {
+                await fs.unlink(tmpJpg).catch(() => {});
+              }
+            }
+            reject(err);
+          })
           .on('end', () => resolve())
           .run();
       });
@@ -448,8 +475,12 @@ export class MediaRepository {
   }
 
   async getImageMetadata(input: string | Buffer): Promise<ImageDimensions & { isTransparent: boolean }> {
-    const { width = 0, height = 0, hasAlpha = false } = await sharp(input, { unlimited: true }).metadata();
-    return { width, height, isTransparent: hasAlpha };
+    try {
+      const { width = 0, height = 0, hasAlpha = false } = await sharp(input, { unlimited: true }).metadata();
+      return { width, height, isTransparent: hasAlpha };
+    } catch {
+      return { width: 0, height: 0, isTransparent: false };
+    }
   }
 
   async extractVideoSampleFrames(input: string, maxFrames = 30, durationSeconds?: number): Promise<string[]> {
