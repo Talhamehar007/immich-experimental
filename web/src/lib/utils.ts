@@ -103,6 +103,8 @@ export const uploadRequest = async <T>(options: UploadRequestOptions): Promise<{
     const xhr = new XMLHttpRequest();
     const unsubscribe = trackUpload(() => xhr.abort());
 
+    xhr.withCredentials = true;
+
     xhr.addEventListener('error', (error) => {
       unsubscribe();
       reject(error);
@@ -113,7 +115,9 @@ export const uploadRequest = async <T>(options: UploadRequestOptions): Promise<{
       if (xhr.readyState === 4 && xhr.status >= 200 && xhr.status < 300) {
         resolve({ data: xhr.response as T, status: xhr.status });
       } else {
-        reject(new ApiError(xhr.statusText, xhr.status, xhr.response));
+        const message =
+          (typeof xhr.response === 'object' && xhr.response?.message) || xhr.statusText || 'Upload failed';
+        reject(new ApiError(message, xhr.status, xhr.response));
       }
     });
 

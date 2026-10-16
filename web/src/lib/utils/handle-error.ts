@@ -2,6 +2,24 @@ import { isHttpError } from '@immich/sdk';
 import { toastManager } from '@immich/ui';
 
 export function getServerErrorMessage(error: unknown) {
+  if (error && typeof error === 'object' && 'statusCode' in error) {
+    const apiError = error as { statusCode?: number; response?: any; message?: string };
+    if (apiError.response?.message) {
+      return apiError.response.message;
+    }
+    if (typeof apiError.response === 'string') {
+      try {
+        const parsed = JSON.parse(apiError.response);
+        return parsed.message || apiError.response;
+      } catch {
+        return apiError.response;
+      }
+    }
+    if (apiError.message) {
+      return apiError.message;
+    }
+  }
+
   if (!isHttpError(error)) {
     return;
   }

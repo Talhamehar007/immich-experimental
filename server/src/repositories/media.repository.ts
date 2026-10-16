@@ -166,6 +166,18 @@ export class MediaRepository {
             .toBuffer({ resolveWithObject: true });
           return await this.transform(decoded, lenientOptions);
         }
+
+        try {
+          const ffmpegBuffer = await this.decodeWithFfmpeg(input);
+          if (ffmpegBuffer) {
+            const decoded = await this.getImageDecodingPipeline(ffmpegBuffer, lenientOptions)
+              .raw()
+              .toBuffer({ resolveWithObject: true });
+            return await this.transform(decoded, lenientOptions);
+          }
+        } catch (ffmpegError: any) {
+          this.logger.debug(`FFmpeg fallback image decoding failed for ${input}: ${ffmpegError?.message || ffmpegError}`);
+        }
       }
       if (!options.processInvalidImages) {
         const decoded = await this.getImageDecodingPipeline(input, lenientOptions)
@@ -175,6 +187,23 @@ export class MediaRepository {
       }
       throw error;
     }
+  }
+
+  private decodeWithFfmpeg(input: string): Promise<Buffer | null> {
+    return new Promise((resolve) => {
+      const proc = spawn('ffmpeg', ['-v', 'error', '-i', input, '-f', 'image2pipe', '-vcodec', 'mjpeg', '-']);
+      const chunks: Buffer[] = [];
+      proc.stdout.on('data', (chunk: Buffer) => chunks.push(chunk));
+      proc.stderr.on('data', () => {});
+      proc.on('error', () => resolve(null));
+      proc.on('close', (code) => {
+        if (code === 0 && chunks.length > 0) {
+          resolve(Buffer.concat(chunks));
+        } else {
+          resolve(null);
+        }
+      });
+    });
   }
 
   private edit(pipeline: Sharp, edits: AssetEditActionItem[]): Sharp {

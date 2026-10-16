@@ -116,8 +116,13 @@ function getDeviceAssetId(asset: File) {
 function hashFile(file: File): Promise<string> {
   return new Promise<string>((resolve, reject) => {
     const worker = new Worker(new URL('$lib/workers/hash-file.ts', import.meta.url), { type: 'module' });
+    const timer = setTimeout(() => {
+      worker.terminate();
+      reject(new Error('Hashing timed out'));
+    }, 15000);
 
     worker.addEventListener('message', ({ data }: MessageEvent<{ result?: string; error?: string }>) => {
+      clearTimeout(timer);
       worker.terminate();
 
       if (data.error) {
@@ -128,6 +133,7 @@ function hashFile(file: File): Promise<string> {
     });
 
     worker.addEventListener('error', (event) => {
+      clearTimeout(timer);
       worker.terminate();
 
       reject(new Error(event.message));
@@ -165,7 +171,7 @@ async function fileUploader({
       fileCreatedAt,
       fileModifiedAt: new Date(assetFile.lastModified).toISOString(),
       isFavorite: 'false',
-      assetData: new File([assetFile], assetFile.name),
+      assetData: assetFile,
     })) {
       formData.append(key, value);
     }
