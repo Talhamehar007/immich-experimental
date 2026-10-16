@@ -30,7 +30,29 @@ const parseError = (error: unknown, status: number, message: string) => {
   };
 };
 
+const isChunkLoadError = (error: unknown): boolean => {
+  const message = (error as Error)?.message ?? '';
+  return (
+    message.includes('Failed to fetch dynamically imported module') ||
+    message.includes('Importing a module script failed') ||
+    message.includes('error loading dynamically imported module')
+  );
+};
+
 export const handleError: HandleClientError = ({ error, status, message }) => {
+  if (isChunkLoadError(error) && typeof window !== 'undefined') {
+    const lastReload = Number(sessionStorage.getItem('immich_chunk_reload_time') || 0);
+    const now = Date.now();
+    if (now - lastReload > 5000) {
+      sessionStorage.setItem('immich_chunk_reload_time', String(now));
+      window.location.reload();
+      return {
+        message: 'Updating application...',
+        code: 0,
+      };
+    }
+  }
+
   const result = parseError(error, status, message);
   console.error(`[hooks.client.ts]:handleError ${result.message}`, error);
   return result;

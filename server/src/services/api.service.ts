@@ -56,6 +56,10 @@ export class ApiService {
         return next();
       }
 
+      if (request.path.startsWith('/_app/')) {
+        return res.status(404).type('text/plain').send('Not Found');
+      }
+
       const responseType = request.accepts('text/html');
       if (!responseType) {
         throw new NotAcceptableException(

@@ -172,7 +172,22 @@
   onMount(() => {
     const element = document.querySelector('#stencil');
     element?.remove();
-    // if the browser theme changes, changes the Immich theme too
+
+    const handlePreloadError = (event: Event) => {
+      console.warn('Dynamic chunk import failed (new build detected), reloading...');
+      event.preventDefault();
+      const lastReload = Number(sessionStorage.getItem('immich_chunk_reload_time') || 0);
+      const now = Date.now();
+      if (now - lastReload > 5000) {
+        sessionStorage.setItem('immich_chunk_reload_time', String(now));
+        window.location.reload();
+      }
+    };
+
+    window.addEventListener('vite:preloadError', handlePreloadError);
+    return () => {
+      window.removeEventListener('vite:preloadError', handlePreloadError);
+    };
   });
 
   eventManager.emit('AppInit');

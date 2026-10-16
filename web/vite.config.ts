@@ -23,6 +23,7 @@ const proxy: Record<string, string | ProxyOptions> = {
 export default defineConfig({
   build: {
     target: 'es2022',
+    emptyOutDir: false,
   },
   resolve: {
     alias: {

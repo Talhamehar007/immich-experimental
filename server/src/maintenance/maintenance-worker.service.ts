@@ -147,6 +147,10 @@ export class MaintenanceWorkerService {
         return next();
       }
 
+      if (request.path.startsWith('/_app/')) {
+        return res.status(404).type('text/plain').send('Not Found');
+      }
+
       const maintenancePath = '/maintenance';
       if (!request.url.startsWith(maintenancePath)) {
         const params = new URLSearchParams();
