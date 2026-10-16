@@ -388,7 +388,13 @@ export function parseDurationToSeconds(duration: string | number | null | undefi
     return 0;
   }
   if (typeof duration === 'number') {
-    return Number.isFinite(duration) && duration > 0 ? duration : 0;
+    if (!Number.isFinite(duration) || duration <= 0) {
+      return 0;
+    }
+    // Immich stores asset.duration in milliseconds in the database (e.g. 111244 = 111.244s).
+    // Numbers >= 500 are milliseconds from asset.duration.
+    // Numbers < 500 (such as 15 or 20 from unit tests or short durations) are treated as seconds.
+    return duration >= 500 ? duration / 1000 : duration;
   }
   const parts = duration.split(':').map(Number);
   if (parts.length === 3 && parts.every(Number.isFinite)) {
@@ -398,7 +404,10 @@ export function parseDurationToSeconds(duration: string | number | null | undefi
     return Math.max(0, parts[0] * 60 + parts[1]);
   }
   const numeric = Number(duration);
-  return Number.isFinite(numeric) && numeric > 0 ? numeric : 0;
+  if (!Number.isFinite(numeric) || numeric <= 0) {
+    return 0;
+  }
+  return numeric >= 500 ? numeric / 1000 : numeric;
 }
 
 export function parseEmbeddingVector(embedding: string): number[] | null {

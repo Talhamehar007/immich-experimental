@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { getKeysDeep, globToPostgresRegex, unsetDeep } from 'src/utils/misc.js';
+import { getKeysDeep, globToPostgresRegex, parseDurationToSeconds, unsetDeep } from 'src/utils/misc.js';
 
 describe('getKeysDeep', () => {
   it('should handle an empty object', () => {
@@ -75,3 +75,31 @@ describe('globToPostgresRegex', () => {
     expect(matches(glob, value)).toEqual(expected);
   });
 });
+
+describe('parseDurationToSeconds', () => {
+  it('should parse null or empty duration as 0', () => {
+    expect(parseDurationToSeconds(null)).toBe(0);
+    expect(parseDurationToSeconds(undefined)).toBe(0);
+    expect(parseDurationToSeconds('')).toBe(0);
+  });
+
+  it('should parse database millisecond values into seconds', () => {
+    expect(parseDurationToSeconds(111244)).toBe(111.244);
+    expect(parseDurationToSeconds(7019)).toBe(7.019);
+    expect(parseDurationToSeconds(2475)).toBe(2.475);
+    expect(parseDurationToSeconds('111244')).toBe(111.244);
+  });
+
+  it('should preserve values already in seconds', () => {
+    expect(parseDurationToSeconds(15)).toBe(15);
+    expect(parseDurationToSeconds(20.5)).toBe(20.5);
+    expect(parseDurationToSeconds('25')).toBe(25);
+  });
+
+  it('should parse HH:MM:SS format', () => {
+    expect(parseDurationToSeconds('0:00:15.000000')).toBe(15);
+    expect(parseDurationToSeconds('0:01:30')).toBe(90);
+    expect(parseDurationToSeconds('1:00:00')).toBe(3600);
+  });
+});
+

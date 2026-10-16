@@ -489,6 +489,9 @@ export class MediaRepository {
     }
 
     let duration = durationSeconds && Number.isFinite(durationSeconds) && durationSeconds > 0 ? durationSeconds : 0;
+    if (duration >= 500) {
+      duration = duration / 1000;
+    }
     if (!duration) {
       try {
         const info = await this.probe(input);
