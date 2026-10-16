@@ -1,6 +1,7 @@
 <script lang="ts">
   import FaceEditor from '$lib/components/asset-viewer/face-editor/FaceEditor.svelte';
   import VideoRemoteViewer from '$lib/components/asset-viewer/VideoRemoteViewer.svelte';
+  import Thumbhash from '$lib/components/Thumbhash.svelte';
   import { assetViewerFadeDuration } from '$lib/constants';
   import { assetViewerManager } from '$lib/managers/asset-viewer-manager.svelte';
   import { authManager } from '$lib/managers/auth-manager.svelte';
@@ -112,7 +113,7 @@
   let droppedFramesCount = $state(0);
   let totalFramesCount = $state(0);
 
-  let showVideo = $state(false);
+  let showVideo = $state(true);
   let hasFocused = $state(false);
   let activeSession: { assetId: string; id: string } | undefined;
   let rebuildCount = 0;
@@ -908,6 +909,23 @@
         onpointerup={handleVideoPointerUp}
         onpointercancel={handleVideoPointerUp}
       >
+        <!-- Instant placeholder underneath video while loading/switching to prevent black flash -->
+        {#if !hasLoadedMetadata}
+          <div class="pointer-events-none absolute inset-0 flex items-center justify-center">
+            {#if asset.thumbhash}
+              <Thumbhash
+                base64ThumbHash={asset.thumbhash}
+                class="size-full {fitMode === 'cover' ? 'object-cover' : 'object-contain'}"
+              />
+            {/if}
+            <img
+              src={getAssetMediaUrl({ id: asset.id, size: AssetMediaSize.Preview, cacheKey })}
+              alt=""
+              class="absolute size-full {fitMode === 'cover' ? 'object-cover' : 'object-contain'}"
+            />
+          </div>
+        {/if}
+
         {#if useHls}
           <hls-video
             bind:this={videoPlayer}

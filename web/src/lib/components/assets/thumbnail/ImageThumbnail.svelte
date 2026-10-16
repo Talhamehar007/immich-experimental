@@ -46,6 +46,12 @@
   let loaded = $state(false);
   let errored = $state(false);
 
+  $effect.pre(() => {
+    void url;
+    loaded = false;
+    errored = false;
+  });
+
   const setLoaded = () => {
     loaded = true;
     onComplete?.(false);

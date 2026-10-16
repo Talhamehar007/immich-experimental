@@ -16,24 +16,56 @@
     IMAGE_THUMBNAIL: { THUMBHASH_FADE_DURATION },
   } = TUNABLES;
 
-  let canvas = $state<HTMLCanvasElement>();
+  const thumbhashCache = new Map<string, { w: number; h: number; rgba: Uint8Array }>();
 
-  $effect(() => {
-    const ctx = canvas?.getContext('2d');
-    if (!canvas || !ctx) {
-      return;
+  function getDecodedThumbhash(hash: string) {
+    let cached = thumbhashCache.get(hash);
+    if (!cached) {
+      cached = thumbHashToRGBA(decodeBase64(hash));
+      if (thumbhashCache.size > 500) {
+        const firstKey = thumbhashCache.keys().next().value;
+        if (firstKey) {
+          thumbhashCache.delete(firstKey);
+        }
+      }
+      thumbhashCache.set(hash, cached);
     }
-    const { w, h, rgba } = thumbHashToRGBA(decodeBase64(base64ThumbHash));
-    canvas.width = w;
-    canvas.height = h;
-    const pixels = ctx.createImageData(w, h);
-    pixels.data.set(rgba);
-    ctx.putImageData(pixels, 0, 0);
-  });
+    return cached;
+  }
+
+  function renderThumbhash(node: HTMLCanvasElement, hash: string) {
+    const draw = (h: string) => {
+      if (!h) {
+        return;
+      }
+      try {
+        const ctx = node.getContext('2d');
+        if (!ctx) {
+          return;
+        }
+        const { w, h: height, rgba } = getDecodedThumbhash(h);
+        node.width = w;
+        node.height = height;
+        const pixels = ctx.createImageData(w, height);
+        pixels.data.set(rgba);
+        ctx.putImageData(pixels, 0, 0);
+      } catch {
+        // ignore invalid hash
+      }
+    };
+
+    draw(hash);
+
+    return {
+      update(newHash: string) {
+        draw(newHash);
+      },
+    };
+  }
 </script>
 
 <canvas
-  bind:this={canvas}
+  use:renderThumbhash={base64ThumbHash}
   class={className}
   out:fade={{ duration: fadeOut ? THUMBHASH_FADE_DURATION : 0 }}
   {...restProps}

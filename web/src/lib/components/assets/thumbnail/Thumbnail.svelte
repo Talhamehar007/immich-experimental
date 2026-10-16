@@ -78,6 +78,12 @@
   let thumbError = $state(false);
   let skipFade = $state(false);
 
+  $effect.pre(() => {
+    void asset.id;
+    loaded = false;
+    thumbError = false;
+  });
+
   let width = $derived(thumbnailSize || thumbnailWidth || 235);
   let height = $derived(thumbnailSize || thumbnailHeight || 235);
 

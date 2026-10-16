@@ -14,19 +14,26 @@
 
   let { src, onStart, onLoad, onError, ref = $bindable(), ...rest }: Props = $props();
 
-  let capturedSource: string | undefined = $state();
+  let capturedSource: string | undefined = $state(src);
   let loaded = $state(false);
   let destroyed = false;
+  let lastStartedSource: string | undefined;
 
-  $effect(() => {
-    if (src === undefined || capturedSource !== undefined) {
-      return;
+  $effect.pre(() => {
+    if (src !== capturedSource) {
+      if (capturedSource !== undefined) {
+        cancelImageUrl(capturedSource);
+      }
+      capturedSource = src;
+      loaded = false;
     }
 
-    capturedSource = src;
-    untrack(() => {
-      onStart?.();
-    });
+    if (capturedSource !== undefined && capturedSource !== lastStartedSource) {
+      lastStartedSource = capturedSource;
+      untrack(() => {
+        onStart?.();
+      });
+    }
   });
 
   onDestroy(() => {
