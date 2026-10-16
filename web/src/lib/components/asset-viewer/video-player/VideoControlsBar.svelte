@@ -216,18 +216,34 @@
 
         <!-- Slider smoothly expands on hover -->
         <div
-          class="flex w-0 items-center overflow-hidden transition-all duration-300 ease-out group-focus-within/volume:w-20 group-hover/volume:w-20"
+          class="flex h-8 w-0 items-center overflow-hidden transition-all duration-300 ease-out group-focus-within/volume:w-22 group-focus-within/volume:px-2 group-hover/volume:w-22 group-hover/volume:px-2"
         >
-          <input
-            type="range"
-            min="0"
-            max="1"
-            step="0.05"
-            aria-label="Volume"
-            value={isMuted ? 0 : volume}
-            class="h-1 w-16 cursor-pointer appearance-none rounded-full bg-white/30 accent-sky-500 transition-colors hover:bg-white/50"
-            oninput={(e) => onVolumeChange(Number((e.currentTarget as HTMLInputElement).value))}
-          />
+          <div class="relative flex h-6 w-16 items-center">
+            <!-- Background Track -->
+            <div class="h-1 w-full rounded-full bg-white/30 transition-colors group-hover/volume:bg-white/40">
+              <!-- Active Volume Fill -->
+              <div
+                class="h-full rounded-full bg-sky-400"
+                style="width: {(isMuted ? 0 : volume) * 100}%;"
+              ></div>
+            </div>
+            <!-- Circular Volume Knob / Pointer -->
+            <div
+              class="pointer-events-none absolute top-1/2 size-3 -translate-x-1/2 -translate-y-1/2 rounded-full bg-sky-400 shadow-md ring-2 ring-white transition-transform duration-150 group-hover/volume:scale-110"
+              style="left: {(isMuted ? 0 : volume) * 100}%;"
+            ></div>
+            <!-- Interactive Range Input -->
+            <input
+              type="range"
+              min="0"
+              max="1"
+              step="0.01"
+              aria-label="Volume"
+              value={isMuted ? 0 : volume}
+              class="absolute inset-0 h-full w-full cursor-pointer opacity-0"
+              oninput={(e) => onVolumeChange(Number((e.currentTarget as HTMLInputElement).value))}
+            />
+          </div>
         </div>
       </div>
 

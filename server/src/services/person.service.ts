@@ -436,6 +436,7 @@ export class PersonService extends BaseService {
           const minSimilarity = Math.max(0.45, 1 - (machineLearning.facialRecognition.maxDistance ?? 0.5));
           const clusters: Array<{
             bestFace: Face;
+            bestFramePath: string;
             imageHeight: number;
             imageWidth: number;
             embeddings: string[];
@@ -481,12 +482,14 @@ export class PersonService extends BaseService {
                   cluster.centroid = parseEmbeddingVector(combineEmbeddings(cluster.embeddings));
                   if ((face.score ?? 0) > (cluster.bestFace.score ?? 0)) {
                     cluster.bestFace = face;
+                    cluster.bestFramePath = framePath;
                     cluster.imageHeight = frameRes.imageHeight;
                     cluster.imageWidth = frameRes.imageWidth;
                   }
                 } else {
                   clusters.push({
                     bestFace: face,
+                    bestFramePath: framePath,
                     imageHeight: frameRes.imageHeight,
                     imageWidth: frameRes.imageWidth,
                     embeddings: [face.embedding],
@@ -500,6 +503,15 @@ export class PersonService extends BaseService {
           }
 
           if (processedFrames > 0) {
+            for (const cluster of clusters) {
+              const { x1, y1, x2, y2 } = cluster.bestFace.boundingBox;
+              const faceFrameTarget = `${previewFile.path}.face-${x1}-${y1}-${x2}-${y2}.jpg`;
+              try {
+                await this.storageRepository.copyFile(cluster.bestFramePath, faceFrameTarget);
+              } catch {
+                // ignore if previewFile path does not exist on disk in unit tests
+              }
+            }
             const imageHeight = clusters[0]?.imageHeight || firstHeight || 1;
             const imageWidth = clusters[0]?.imageWidth || firstWidth || 1;
             const faces: Face[] = clusters.map((cluster) => ({

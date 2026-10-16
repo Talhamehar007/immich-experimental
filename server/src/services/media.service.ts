@@ -407,7 +407,9 @@ export class MediaService extends BaseService {
         this.logger.error(`Could not generate person thumbnail for video ${personGroupId}: missing preview path`);
         return JobStatus.Failed;
       }
-      inputImage = previewPath;
+      const faceFramePath = `${previewPath}.face-${x1}-${y1}-${x2}-${y2}.jpg`;
+      const hasFaceFrame = await this.storageRepository.checkFileExists(faceFramePath);
+      inputImage = hasFaceFrame ? faceFramePath : previewPath;
     } else if (image.extractEmbedded && mimeTypes.isRaw(originalPath)) {
       const extracted = await this.extractImage(originalPath, image.preview.size);
       inputImage = extracted ? extracted.buffer : originalPath;

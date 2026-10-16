@@ -501,17 +501,18 @@ export class MediaRepository {
     const targetFrames = duration > 0 ? Math.max(1, Math.min(maxFrames, Math.ceil(duration * 2))) : maxFrames;
     const vfFilter =
       duration > 0
-        ? `fps=${Math.max(0.01, targetFrames / duration).toFixed(6)},scale='min(1080,iw)':-2`
-        : `thumbnail=15,scale='min(1080,iw)':-2`;
+        ? `fps=${Math.max(0.01, targetFrames / duration).toFixed(6)},scale='min(1080,iw)':-2:out_range=pc,format=yuvj420p`
+        : `thumbnail=15,scale='min(1080,iw)':-2:out_range=pc,format=yuvj420p`;
 
     const tempDir = await fs.mkdtemp(join(os.tmpdir(), 'immich-video-frames-'));
-    try {
-      await new Promise<void>((resolve, reject) => {
+    const runExtract = (skipNonIntra: boolean) =>
+      new Promise<void>((resolve, reject) => {
         const args = [
           '-nostdin',
           '-y',
           '-v',
           'error',
+          ...(skipNonIntra ? ['-skip_frame', 'nointra'] : []),
           '-i',
           input,
           '-vf',
@@ -519,6 +520,8 @@ export class MediaRepository {
           ...(duration > 0 ? [] : ['-vsync', 'vfr']),
           '-frames:v',
           String(targetFrames),
+          '-strict',
+          'unofficial',
           '-q:v',
           '2',
           join(tempDir, 'frame_%03d.jpg'),
@@ -537,11 +540,27 @@ export class MediaRepository {
         });
       });
 
-      const entries = await fs.readdir(tempDir);
-      const framePaths = entries
+    try {
+      try {
+        await runExtract(true);
+      } catch {
+        await runExtract(false);
+      }
+
+      let entries = await fs.readdir(tempDir);
+      let framePaths = entries
         .filter((name) => name.endsWith('.jpg'))
         .sort()
         .map((name) => join(tempDir, name));
+
+      if (framePaths.length < Math.min(3, targetFrames)) {
+        await runExtract(false);
+        entries = await fs.readdir(tempDir);
+        framePaths = entries
+          .filter((name) => name.endsWith('.jpg'))
+          .sort()
+          .map((name) => join(tempDir, name));
+      }
 
       if (framePaths.length === 0) {
         await fs.rm(tempDir, { recursive: true, force: true }).catch(() => {});
