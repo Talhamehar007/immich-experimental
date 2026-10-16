@@ -155,8 +155,7 @@ cmd_doctor() {
 
 cmd_start_deps() {
   log_info "Starting isolated backend dependencies (PostgreSQL 14 VectorChord & Valkey/Redis)..."
-  log_info "Using Docker compose file: ${COMPOSE_FILE}"
-  docker compose -f "$COMPOSE_FILE" -p immich_exp up -d immich-exp-database immich-exp-redis
+  docker compose --env-file "${REPO_ROOT}/.env.isolated" -f "$COMPOSE_FILE" -p immich_exp up -d immich-exp-database immich-exp-redis
 
   log_info "Waiting for isolated database to report healthy on 127.0.0.1:${DB_PORT}..."
   local attempts=0

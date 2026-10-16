@@ -48,21 +48,22 @@ def req(path, method="GET", data=None, headers=None, expect_status=200):
             body = data
 
     request = urllib.request.Request(url, data=body, headers=h, method=method)
+    expected = [expect_status] if isinstance(expect_status, int) else (expect_status if expect_status is not None else [])
     try:
         with urllib.request.urlopen(request, timeout=30) as response:
             status = response.getcode()
             resp_body = response.read()
-            if status != expect_status:
+            if expect_status is not None and status not in expected:
                 raise AssertionError(f"Expected status {expect_status}, got {status}")
             return status, resp_body, response.headers
     except urllib.error.HTTPError as e:
         resp_body = e.read()
-        if e.code == expect_status:
+        if expect_status is not None and e.code in expected:
             return e.code, resp_body, e.headers
         raise AssertionError(f"HTTP {e.code}: {resp_body.decode('utf-8', errors='ignore')}")
 
 # Multipart upload helper
-def upload_file(filename, file_bytes, is_favorite=False, extra_fields=None):
+def upload_file(filename, file_bytes, is_favorite=False, extra_fields=None, expect_status=(200, 201)):
     boundary = "----WebKitFormBoundary" + str(int(time.time() * 1000))
     body = bytearray()
     
@@ -87,7 +88,7 @@ def upload_file(filename, file_bytes, is_favorite=False, extra_fields=None):
     body.extend(f"--{boundary}--\r\n".encode("utf-8"))
     
     headers = {"Content-Type": f"multipart/form-data; boundary={boundary}"}
-    return req("/assets", method="POST", data=bytes(body), headers=headers, expect_status=201)
+    return req("/assets", method="POST", data=bytes(body), headers=headers, expect_status=expect_status)
 
 print("\n=======================================================")
 print("   IMMICH-EXPERIMENTAL END-TO-END VERIFICATION SUITE  ")
@@ -146,16 +147,22 @@ def test_bulk_upload_check():
     assert res["results"][0]["action"] == "accept"
 
 # 4. Asset Uploads (JPEG, HEIC, MP4)
+last_jpeg_bytes = None
+
 @test("Asset Upload - JPEG Image")
 def test_upload_jpeg():
+    global last_jpeg_bytes
     from PIL import Image
+    import random
     buf = BytesIO()
-    img = Image.new("RGB", (200, 200), color=(0, 128, 255))
+    color = (random.randint(0, 255), random.randint(0, 255), random.randint(0, 255))
+    img = Image.new("RGB", (200, 200), color=color)
     img.save(buf, format="JPEG")
     jpeg_bytes = buf.getvalue()
+    last_jpeg_bytes = jpeg_bytes
     
-    fname = f"e2e-test-{int(time.time())}.jpg"
-    status, body, _ = upload_file(fname, jpeg_bytes)
+    fname = f"e2e-test-{int(time.time() * 1000)}.jpg"
+    status, body, _ = upload_file(fname, jpeg_bytes, expect_status=201)
     res = json.loads(body)
     assert res["status"] == "created"
     assert "id" in res
@@ -163,14 +170,10 @@ def test_upload_jpeg():
 
 @test("Asset Duplicate Rejection (POST /assets duplicate)")
 def test_upload_duplicate():
-    if not uploaded_asset_ids:
+    global last_jpeg_bytes
+    if not uploaded_asset_ids or not last_jpeg_bytes:
         return
-    # Re-upload the same file using cookie
-    from PIL import Image
-    buf = BytesIO()
-    img = Image.new("RGB", (200, 200), color=(0, 128, 255))
-    img.save(buf, format="JPEG")
-    jpeg_bytes = buf.getvalue()
+    jpeg_bytes = last_jpeg_bytes
     fname = "duplicate-test.jpg"
     
     # upload duplicate should return 200 status duplicate
@@ -248,15 +251,15 @@ def test_timeline_buckets():
     assert isinstance(buckets, list)
     assert len(buckets) > 0
 
-@test("CLIP Semantic Search (GET /search/smart)")
+@test("CLIP Semantic Search (POST /search/smart)")
 def test_smart_search():
-    status, body, _ = req("/search/smart?query=nature")
+    status, body, _ = req("/search/smart", method="POST", data={"query": "nature"})
     res = json.loads(body)
     assert "assets" in res
 
-@test("People Search (GET /search/person)")
+@test("People Search (GET /search/person?name=)")
 def test_search_person():
-    status, body, _ = req("/search/person")
+    status, body, _ = req("/search/person?name=")
     persons = json.loads(body)
     assert isinstance(persons, list)
 

@@ -33,14 +33,14 @@ services:
     environment:
       POSTGRES_PASSWORD: ${DB_PASSWORD:-postgres}
       POSTGRES_USER: ${DB_USERNAME:-postgres}
-      POSTGRES_DB: ${DB_DATABASE_NAME:-immich_exp}
+      POSTGRES_DB: ${ISOLATED_DB_NAME:-${DB_DATABASE_NAME:-immich_exp}}
       POSTGRES_INITDB_ARGS: '--data-checksums'
     volumes:
       - immich_exp_pgdata:/var/lib/postgresql/data
     ports:
       # Bound strictly to 127.0.0.1 on port 5433 (never conflicts with default 5432)
       - '127.0.0.1:${DB_PORT:-5433}:5432'
-    shm_size: 128mb
+    shm_size: 1gb
     restart: unless-stopped
     networks:
       - immich_exp_network
