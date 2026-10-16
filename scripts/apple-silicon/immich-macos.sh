@@ -278,17 +278,17 @@ cmd_start() {
     export MACHINE_LEARNING_CACHE_FOLDER="${MACHINE_LEARNING_CACHE_FOLDER}"
     export IMMICH_MEDIA_LOCATION="${IMMICH_MEDIA_LOCATION}"
     export MACHINE_LEARNING_MODEL_TTL="${MACHINE_LEARNING_MODEL_TTL}"
-    nohup uv run --project "${REPO_ROOT}/machine-learning" python -m immich_ml < /dev/null > "${PID_DIR}/ml.log" 2>&1 &
-    local ml_pid=$!
+    local ml_pid
+    ml_pid="$(python3 -c 'import subprocess, sys; f=open(sys.argv[1], "ab"); p=subprocess.Popen(sys.argv[2:], stdin=subprocess.DEVNULL, stdout=f, stderr=subprocess.STDOUT, start_new_session=True); print(p.pid)' "${PID_DIR}/ml.log" uv run --project "${REPO_ROOT}/machine-learning" python -m immich_ml)"
     echo "$ml_pid" > "${PID_DIR}/ml.pid"
     log_info "Spawned ML service (PID: $ml_pid). Waiting for readiness..."
     local attempts=0
-    until curl -s "http://${IMMICH_HOST}:${IMMICH_ML_PORT}/ping" 2>/dev/null | grep -q "pong" || [ $attempts -ge 20 ]; do
+    until curl -s "http://127.0.0.1:${IMMICH_ML_PORT}/ping" 2>/dev/null | grep -q "pong" || [ $attempts -ge 20 ]; do
       sleep 1
       attempts=$((attempts + 1))
     done
-    if curl -s "http://${IMMICH_HOST}:${IMMICH_ML_PORT}/ping" 2>/dev/null | grep -q "pong"; then
-      log_success "Native ML service is ready at http://${IMMICH_HOST}:${IMMICH_ML_PORT}"
+    if curl -s "http://127.0.0.1:${IMMICH_ML_PORT}/ping" 2>/dev/null | grep -q "pong"; then
+      log_success "Native ML service is ready at http://127.0.0.1:${IMMICH_ML_PORT}"
     else
       log_warn "ML service did not report ready within timeout. Check ${PID_DIR}/ml.log."
     fi
@@ -298,13 +298,13 @@ cmd_start() {
   if [ -f "${PID_DIR}/server.pid" ] && kill -0 "$(cat "${PID_DIR}/server.pid")" 2>/dev/null; then
     log_info "Native Server is already running (PID: $(cat "${PID_DIR}/server.pid"))."
   else
-    log_info "Starting Immich Server natively outside Docker on ${IMMICH_HOST}:${IMMICH_SERVER_PORT}..."
+    log_info "Starting Immich Server natively outside Docker on port ${IMMICH_SERVER_PORT} (IPv4 127.0.0.1 & IPv6 localhost)..."
     mkdir -p "${IMMICH_MEDIA_LOCATION}"
     if [ ! -f "${REPO_ROOT}/server/dist/main.js" ]; then
       log_info "Building server..."
       pnpm --filter immich run build
     fi
-    export IMMICH_HOST="${IMMICH_HOST}"
+    export IMMICH_HOST="::"
     export IMMICH_PORT="${IMMICH_SERVER_PORT}"
     export SERVER_PORT="${IMMICH_SERVER_PORT}"
     export IMMICH_MACHINE_LEARNING_URL="${IMMICH_MACHINE_LEARNING_URL}"
@@ -319,17 +319,17 @@ cmd_start() {
     export REDIS_DBINDEX="${REDIS_DBINDEX}"
     export IMMICH_BUILD_DATA="${IMMICH_BUILD_DATA:-${REPO_ROOT}/.build_data}"
     export PATH="${SCRIPT_DIR}:${PATH}"
-    nohup node "${REPO_ROOT}/server/dist/main.js" < /dev/null > "${PID_DIR}/server.log" 2>&1 &
-    local server_pid=$!
+    local server_pid
+    server_pid="$(python3 -c 'import subprocess, sys; f=open(sys.argv[1], "ab"); p=subprocess.Popen(sys.argv[2:], stdin=subprocess.DEVNULL, stdout=f, stderr=subprocess.STDOUT, start_new_session=True); print(p.pid)' "${PID_DIR}/server.log" node "${REPO_ROOT}/server/dist/main.js")"
     echo "$server_pid" > "${PID_DIR}/server.pid"
     log_info "Spawned Immich server (PID: $(cat "${PID_DIR}/server.pid")). Waiting for HTTP 200..."
     local attempts=0
-    until curl -s -f "http://${IMMICH_HOST}:${IMMICH_SERVER_PORT}/api/server/config" >/dev/null 2>&1 || [ $attempts -ge 30 ]; do
+    until curl -s -f "http://127.0.0.1:${IMMICH_SERVER_PORT}/api/server/config" >/dev/null 2>&1 || [ $attempts -ge 30 ]; do
       sleep 1
       attempts=$((attempts + 1))
     done
-    if curl -s -f "http://${IMMICH_HOST}:${IMMICH_SERVER_PORT}/api/server/config" >/dev/null 2>&1; then
-      log_success "Immich Server is UP and responding at http://${IMMICH_HOST}:${IMMICH_SERVER_PORT}!"
+    if curl -s -f "http://127.0.0.1:${IMMICH_SERVER_PORT}/api/server/config" >/dev/null 2>&1; then
+      log_success "Immich Server is UP and responding at http://127.0.0.1:${IMMICH_SERVER_PORT} and http://localhost:${IMMICH_SERVER_PORT}!"
     else
       log_warn "Server did not respond with 200 within timeout. Check ${PID_DIR}/server.log."
     fi
@@ -342,19 +342,20 @@ cmd_stop() {
     local spid
     spid="$(cat "${PID_DIR}/server.pid" 2>/dev/null || echo '')"
     if [ -n "$spid" ] && kill -0 "$spid" 2>/dev/null; then
-      kill "$spid" 2>/dev/null || true
+      kill -TERM -- "-$spid" 2>/dev/null || kill "$spid" 2>/dev/null || true
       log_success "Stopped Native Server (PID $spid)."
     fi
     rm -f "${PID_DIR}/server.pid"
   fi
 
+  pkill -f "immich-experimental/server/dist" 2>/dev/null || true
   pkill -f "node dist/main.js" 2>/dev/null || true
 
   if [ -f "${PID_DIR}/ml.pid" ]; then
     local mpid
     mpid="$(cat "${PID_DIR}/ml.pid" 2>/dev/null || echo '')"
     if [ -n "$mpid" ] && kill -0 "$mpid" 2>/dev/null; then
-      kill "$mpid" 2>/dev/null || true
+      kill -TERM -- "-$mpid" 2>/dev/null || kill "$mpid" 2>/dev/null || true
       log_success "Stopped Native ML (PID $mpid)."
     fi
     rm -f "${PID_DIR}/ml.pid"

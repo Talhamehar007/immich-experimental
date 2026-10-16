@@ -153,8 +153,21 @@ export class MediaRepository {
   }
 
   async decodeImage(input: string | Buffer, options: DecodeToBufferOptions): Promise<Bitmap> {
-    const decoded = await this.getImageDecodingPipeline(input, options).raw().toBuffer({ resolveWithObject: true });
-    return await this.transform(decoded, options);
+    try {
+      const decoded = await this.getImageDecodingPipeline(input, options).raw().toBuffer({ resolveWithObject: true });
+      return await this.transform(decoded, options);
+    } catch (error: any) {
+      if (typeof input === 'string') {
+        const extracted = await this.extract(input);
+        if (extracted?.buffer) {
+          const decoded = await this.getImageDecodingPipeline(extracted.buffer, options)
+            .raw()
+            .toBuffer({ resolveWithObject: true });
+          return await this.transform(decoded, options);
+        }
+      }
+      throw error;
+    }
   }
 
   private edit(pipeline: Sharp, edits: AssetEditActionItem[]): Sharp {
